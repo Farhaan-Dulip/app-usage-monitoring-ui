@@ -25,6 +25,37 @@ const pricingMap = {
 
 const fallbackCosts = [150, 95, 72, 49, 29, 18];
 
+const mockFleetDevices = [
+  {
+    id: 'laptop-dx01',
+    pcName: 'LAPTOP-DX01',
+    user: 'Farhan',
+    isLive: true,
+    activeLicenseCount: null,
+  },
+  {
+    id: 'ws-fin-014',
+    pcName: 'WS-FIN-014',
+    user: 'Nadia',
+    isLive: true,
+    activeLicenseCount: 4,
+  },
+  {
+    id: 'design-mac-07',
+    pcName: 'DESIGN-MAC-07',
+    user: 'Ayesha',
+    isLive: false,
+    activeLicenseCount: 2,
+  },
+  {
+    id: 'eng-pc-22',
+    pcName: 'ENG-PC-22',
+    user: 'Ravi',
+    isLive: true,
+    activeLicenseCount: 5,
+  },
+];
+
 function formatRuntime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
@@ -62,10 +93,12 @@ function getAppIcon(appName) {
 }
 
 export default function App() {
+  const [activeView, setActiveView] = useState('dashboard');
   const [config, setConfig] = useState(null);
   const [latestTelemetry, setLatestTelemetry] = useState(null);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [error, setError] = useState('');
+  const [dispatchingDeviceId, setDispatchingDeviceId] = useState('');
   const [sortConfig, setSortConfig] = useState({
     key: 'savingsOpportunity',
     direction: 'desc',
@@ -150,6 +183,33 @@ export default function App() {
     return sortableRows;
   }, [usageByApp, sortConfig]);
 
+  const fleetDevices = useMemo(() => {
+    const activeExpensiveLicenses = usageByApp.filter(
+      (entry) => entry.status === 'Active' && entry.monthlyCost >= 20
+    ).length;
+
+    return mockFleetDevices.map((device, index) => ({
+      ...device,
+      activeLicenseCount:
+        index === 0 ? activeExpensiveLicenses : device.activeLicenseCount,
+    }));
+  }, [usageByApp]);
+
+  const fleetSummary = useMemo(() => {
+    const liveAgents = fleetDevices.filter((device) => device.isLive).length;
+    const activeLicenses = fleetDevices.reduce(
+      (sum, device) => sum + device.activeLicenseCount,
+      0
+    );
+
+    return {
+      liveAgents,
+      offlineAgents: fleetDevices.length - liveAgents,
+      activeLicenses,
+      totalDevices: fleetDevices.length,
+    };
+  }, [fleetDevices]);
+
   const requestSort = (key) => {
     setSortConfig((currentSort) => ({
       key,
@@ -160,7 +220,14 @@ export default function App() {
 
   const renderSortIndicator = (key) => {
     if (sortConfig.key !== key) return '';
-    return sortConfig.direction === 'asc' ? ' ↑' : ' ↓';
+    return sortConfig.direction === 'asc' ? ' ^' : ' v';
+  };
+
+  const handleDispatch = (deviceId) => {
+    setDispatchingDeviceId(deviceId);
+    window.setTimeout(() => {
+      setDispatchingDeviceId('');
+    }, 1600);
   };
 
   const loadConfig = () => {
@@ -238,170 +305,305 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">License intelligence</p>
-          <h1>Software Utilization Command Center</h1>
-          <p>
-            Live app usage telemetry translated into spend visibility, reclaimable
-            seats, and savings opportunities.
-          </p>
+      <nav className="top-nav" aria-label="Primary navigation">
+        <div className="brand-mark">
+          <span className="brand-icon">A</span>
+          <span>AgentOps</span>
         </div>
-        <button className="reset-button" onClick={resetUsage}>
-          Reset usage
-        </button>
-      </header>
+        <div className="nav-actions">
+          <button
+            className={activeView === 'dashboard' ? 'nav-link active' : 'nav-link'}
+            type="button"
+            onClick={() => setActiveView('dashboard')}
+          >
+            Dashboard
+          </button>
+          <button
+            className={
+              activeView === 'agent-management' ? 'nav-link active' : 'nav-link'
+            }
+            type="button"
+            onClick={() => setActiveView('agent-management')}
+          >
+            Agent Management
+          </button>
+        </div>
+      </nav>
 
-      {error && <div className="error-message">{error}</div>}
-
-      <section className="summary-grid" aria-label="Executive summary">
-        <article className="summary-card">
-          <span>Total Monthly Software Spend</span>
-          <strong>{formatCurrency(TOTAL_MONTHLY_SOFTWARE_SPEND)}</strong>
-          <small>Mock licensed portfolio total</small>
-        </article>
-        <article className="summary-card summary-card-alert">
-          <span>Identified Monthly Savings</span>
-          <strong>{formatCurrency(aggregates.totalSavings)}</strong>
-          <small>{formatCurrency(aggregates.totalWaste)} waste detected</small>
-        </article>
-        <article className="summary-card">
-          <span>License Efficiency Score</span>
-          <strong>{aggregates.licenseEfficiencyScore}%</strong>
-          <small>
-            {aggregates.activeSeats} active of {aggregates.totalSeats} licensed seats
-          </small>
-        </article>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
+      <main className="main-content">
+        <header className="hero">
           <div>
-            <h2>Main Utilization Table</h2>
+            <p className="eyebrow">
+              {activeView === 'dashboard'
+                ? 'License intelligence'
+                : 'Fleet management'}
+            </p>
+            <h1>
+              {activeView === 'dashboard'
+                ? 'Software Utilization Command Center'
+                : 'Agent Management'}
+            </h1>
             <p>
-              Reclaimable licenses are seats with less than 1 hour of tracked
-              active runtime.
+              {activeView === 'dashboard'
+                ? 'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.'
+                : 'Monitor endpoint health, active expensive licenses, and redeploy agents from one operational view.'}
             </p>
           </div>
-          {latestTelemetry?.timestamp && (
-            <span className="last-updated">
-              Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
-            </span>
+          {activeView === 'dashboard' && (
+            <button className="reset-button" onClick={resetUsage}>
+              Reset usage
+            </button>
           )}
-        </div>
+        </header>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>
-                  <button type="button" onClick={() => requestSort('appName')}>
-                    App Identity{renderSortIndicator('appName')}
-                  </button>
-                </th>
-                <th>
-                  <button type="button" onClick={() => requestSort('status')}>
-                    Status{renderSortIndicator('status')}
-                  </button>
-                </th>
-                <th>
-                  <button
-                    type="button"
-                    onClick={() => requestSort('totalRuntimeSeconds')}
-                  >
-                    Active Runtime{renderSortIndicator('totalRuntimeSeconds')}
-                  </button>
-                </th>
-                <th>
-                  <button type="button" onClick={() => requestSort('monthlyCost')}>
-                    Cost Impact{renderSortIndicator('monthlyCost')}
-                  </button>
-                </th>
-                <th>
-                  <button
-                    type="button"
-                    onClick={() => requestSort('savingsOpportunity')}
-                  >
-                    Savings Opportunity{renderSortIndicator('savingsOpportunity')}
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedUsageByApp.map((entry) => (
-                <tr key={entry.appName}>
-                  <td>
-                    <div className="app-identity">
-                      <span className="app-icon">{entry.icon}</span>
-                      <span>{entry.appName}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <span
-                      className={`status-badge ${
-                        entry.status === 'Active'
-                          ? 'status-active'
-                          : 'status-reclaimable'
-                      }`}
-                    >
-                      {entry.status}
-                    </span>
-                  </td>
-                  <td>{formatRuntime(entry.totalRuntimeSeconds)}</td>
-                  <td>{formatCurrency(entry.monthlyCost)}</td>
-                  <td
-                    className={
-                      entry.savingsOpportunity > 0 ? 'savings-value' : 'muted-value'
-                    }
-                  >
-                    {entry.savingsOpportunity > 0
-                      ? `-${formatCurrency(entry.savingsOpportunity)}`
-                      : formatCurrency(0)}
-                  </td>
-                </tr>
-              ))}
-              {sortedUsageByApp.length === 0 && (
-                <tr>
-                  <td colSpan="5" className="empty-state">
-                    Waiting for licensed app configuration.
-                  </td>
-                </tr>
+        {error && <div className="error-message">{error}</div>}
+
+        {activeView === 'dashboard' && (
+          <>
+          <section className="summary-grid" aria-label="Executive summary">
+            <article className="summary-card">
+              <span>Total Monthly Software Spend</span>
+              <strong>{formatCurrency(TOTAL_MONTHLY_SOFTWARE_SPEND)}</strong>
+              <small>Mock licensed portfolio total</small>
+            </article>
+            <article className="summary-card summary-card-alert">
+              <span>Identified Monthly Savings</span>
+              <strong>{formatCurrency(aggregates.totalSavings)}</strong>
+              <small>{formatCurrency(aggregates.totalWaste)} waste detected</small>
+            </article>
+            <article className="summary-card">
+              <span>License Efficiency Score</span>
+              <strong>{aggregates.licenseEfficiencyScore}%</strong>
+              <small>
+                {aggregates.activeSeats} active of {aggregates.totalSeats} licensed
+                seats
+              </small>
+            </article>
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>Main Utilization Table</h2>
+                <p>
+                  Reclaimable licenses are seats with less than 1 hour of tracked
+                  active runtime.
+                </p>
+              </div>
+              {latestTelemetry?.timestamp && (
+                <span className="last-updated">
+                  Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
+                </span>
               )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {usageByUrl.length > 0 && (
-        <section className="panel compact-panel">
-          <div className="panel-header">
-            <div>
-              <h2>Web URL Usage</h2>
-              <p>Tracked browser destinations included in the telemetry feed.</p>
             </div>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>URL</th>
-                  <th>Runtime</th>
-                  <th>Seconds</th>
-                </tr>
-              </thead>
-              <tbody>
-                {usageByUrl.map((entry) => (
-                  <tr key={entry.url}>
-                    <td>{entry.url}</td>
-                    <td>{formatRuntime(entry.total_runtime_seconds)}</td>
-                    <td>{entry.total_runtime_seconds}</td>
+
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>
+                      <button type="button" onClick={() => requestSort('appName')}>
+                        App Identity{renderSortIndicator('appName')}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" onClick={() => requestSort('status')}>
+                        Status{renderSortIndicator('status')}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        onClick={() => requestSort('totalRuntimeSeconds')}
+                      >
+                        Active Runtime{renderSortIndicator('totalRuntimeSeconds')}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        onClick={() => requestSort('monthlyCost')}
+                      >
+                        Cost Impact{renderSortIndicator('monthlyCost')}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        onClick={() => requestSort('savingsOpportunity')}
+                      >
+                        Savings Opportunity{renderSortIndicator('savingsOpportunity')}
+                      </button>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+                </thead>
+                <tbody>
+                  {sortedUsageByApp.map((entry) => (
+                    <tr key={entry.appName}>
+                      <td>
+                        <div className="app-identity">
+                          <span className="app-icon">{entry.icon}</span>
+                          <span>{entry.appName}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          className={`status-badge ${
+                            entry.status === 'Active'
+                              ? 'status-active'
+                              : 'status-reclaimable'
+                          }`}
+                        >
+                          {entry.status}
+                        </span>
+                      </td>
+                      <td>{formatRuntime(entry.totalRuntimeSeconds)}</td>
+                      <td>{formatCurrency(entry.monthlyCost)}</td>
+                      <td
+                        className={
+                          entry.savingsOpportunity > 0
+                            ? 'savings-value'
+                            : 'muted-value'
+                        }
+                      >
+                        {entry.savingsOpportunity > 0
+                          ? `-${formatCurrency(entry.savingsOpportunity)}`
+                          : formatCurrency(0)}
+                      </td>
+                    </tr>
+                  ))}
+                  {sortedUsageByApp.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="empty-state">
+                        Waiting for licensed app configuration.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {usageByUrl.length > 0 && (
+            <section className="panel compact-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Web URL Usage</h2>
+                  <p>Tracked browser destinations included in the telemetry feed.</p>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>URL</th>
+                      <th>Runtime</th>
+                      <th>Seconds</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usageByUrl.map((entry) => (
+                      <tr key={entry.url}>
+                        <td>{entry.url}</td>
+                        <td>{formatRuntime(entry.total_runtime_seconds)}</td>
+                        <td>{entry.total_runtime_seconds}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+          </>
+        )}
+
+        {activeView === 'agent-management' && (
+          <>
+          <section className="summary-grid" aria-label="Fleet summary">
+            <article className="summary-card">
+              <span>Live Agents</span>
+              <strong>{fleetSummary.liveAgents}</strong>
+              <small>{fleetSummary.totalDevices} devices registered</small>
+            </article>
+            <article className="summary-card summary-card-alert">
+              <span>Offline Agents</span>
+              <strong>{fleetSummary.offlineAgents}</strong>
+              <small>Devices needing redeploy or investigation</small>
+            </article>
+            <article className="summary-card">
+              <span>Active Expensive Licenses</span>
+              <strong>{fleetSummary.activeLicenses}</strong>
+              <small>Detected across the managed fleet</small>
+            </article>
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>Fleet Management View</h2>
+                <p>Deployment health by device with quick redeploy actions.</p>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>PC Name & User</th>
+                    <th>Agent Status</th>
+                    <th>Active License Count</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fleetDevices.map((device) => (
+                    <tr key={device.id}>
+                      <td>
+                        <div className="device-identity">
+                          <strong>{device.pcName}</strong>
+                          <span>{device.user}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="agent-status">
+                          <span
+                            className={`status-dot ${
+                              device.isLive ? 'dot-live' : 'dot-offline'
+                            }`}
+                          />
+                          {device.isLive ? 'Live' : 'Offline'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="license-count">
+                          {device.activeLicenseCount}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          className="dispatch-button"
+                          disabled={dispatchingDeviceId === device.id}
+                          type="button"
+                          onClick={() => handleDispatch(device.id)}
+                        >
+                          {dispatchingDeviceId === device.id ? (
+                            <>
+                              <span className="button-spinner" />
+                              Dispatching
+                            </>
+                          ) : (
+                            'Dispatch/Re-deploy'
+                          )}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          </>
+        )}
+      </main>
     </div>
   );
 }
