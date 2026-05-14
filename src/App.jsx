@@ -36,6 +36,39 @@ const pricingMap = {
 };
 
 const fallbackCosts = [150, 95, 72, 49, 29, 18];
+const fallbackExtensionCosts = [19, 12, 20, 10];
+
+const extensionPricingMap = {
+  'github-copilot': 19,
+  'github copilot': 19,
+  copilot: 19,
+  tabnine: 12,
+  codex: 20,
+  cursor: 20,
+  'cursor ai': 20,
+  'claude code': 20,
+  cline: 15,
+  'gemini code assist': 19,
+};
+
+const appDisplayNames = {
+  'code.exe': 'Visual Studio Code',
+  code: 'Visual Studio Code',
+  'cursor.exe': 'Cursor',
+  cursor: 'Cursor',
+  'idea64.exe': 'IntelliJ IDEA',
+  idea64: 'IntelliJ IDEA',
+  'webstorm64.exe': 'WebStorm',
+  webstorm64: 'WebStorm',
+  'pycharm64.exe': 'PyCharm',
+  pycharm64: 'PyCharm',
+  'devenv.exe': 'Visual Studio',
+  devenv: 'Visual Studio',
+  'chrome.exe': 'Google Chrome',
+  chrome: 'Google Chrome',
+  'firefox.exe': 'Mozilla Firefox',
+  firefox: 'Mozilla Firefox',
+};
 
 const usageHistory = Array.from({ length: 30 }, (_, index) => {
   const date = new Date('2026-04-01T00:00:00.000Z');
@@ -203,6 +236,19 @@ function getMonthlyCost(appName, index) {
   return fallbackCosts[index % fallbackCosts.length];
 }
 
+function getExtensionMonthlyCost(extensionName, index) {
+  const normalizedName = extensionName.toLowerCase();
+  const matchingKey = Object.keys(extensionPricingMap).find((key) =>
+    normalizedName.includes(key)
+  );
+
+  if (matchingKey) {
+    return extensionPricingMap[matchingKey];
+  }
+
+  return fallbackExtensionCosts[index % fallbackExtensionCosts.length];
+}
+
 function getAppIcon(appName) {
   return appName
     .split(/\s+/)
@@ -211,6 +257,27 @@ function getAppIcon(appName) {
     .map((part) => part[0])
     .join('')
     .toUpperCase();
+}
+
+function titleCaseIdentifier(identifier) {
+  return identifier
+    .replace(/\.[^/.]+$/, '')
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function getReadableAppIdentity(appName) {
+  const normalizedName = String(appName).trim();
+  const lookupKey = normalizedName.toLowerCase();
+  const displayName = appDisplayNames[lookupKey] || titleCaseIdentifier(normalizedName);
+
+  return {
+    displayName,
+    rawName: normalizedName,
+    shouldShowRawName: displayName.toLowerCase() !== lookupKey,
+  };
 }
 
 function getTelemetryPcName(payload) {
@@ -226,6 +293,42 @@ function getTelemetryPcName(payload) {
   );
 }
 
+function getUniqueExtensionRules(extensions = []) {
+  const extensionMap = new Map();
+
+  extensions.forEach((extension) => {
+    if (!extension?.name) return;
+
+    const key = extension.name;
+    const existing = extensionMap.get(key) || {
+      name: extension.name,
+      parentApps: [],
+      identifiers: [],
+      matchAll: [],
+    };
+
+    if (extension.parent_app && !existing.parentApps.includes(extension.parent_app)) {
+      existing.parentApps.push(extension.parent_app);
+    }
+
+    (extension.identifiers || []).forEach((identifier) => {
+      if (!existing.identifiers.includes(identifier)) {
+        existing.identifiers.push(identifier);
+      }
+    });
+
+    (extension.match_all || []).forEach((identifier) => {
+      if (!existing.matchAll.includes(identifier)) {
+        existing.matchAll.push(identifier);
+      }
+    });
+
+    extensionMap.set(key, existing);
+  });
+
+  return Array.from(extensionMap.values());
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState('dashboard');
   const [config, setConfig] = useState(null);
@@ -234,6 +337,13 @@ export default function App() {
   const [error, setError] = useState('');
   const [dispatchingDeviceId, setDispatchingDeviceId] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState('');
+  const [isDeployingAgent, setIsDeployingAgent] = useState(false);
+  const [deployTarget, setDeployTarget] = useState('');
+  const [deployForm, setDeployForm] = useState({
+    pcName: '',
+    user: '',
+    policy: 'Finance baseline',
+  });
   const [selectedDeviceId, setSelectedDeviceId] = useState('laptop-dx01');
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [historicalRange, setHistoricalRange] = useState(30);
@@ -262,14 +372,16 @@ export default function App() {
     if (!config) return [];
 
     return config.licensed_apps.map((appName, index) => {
+      const appIdentity = getReadableAppIdentity(appName);
       const totalRuntimeSeconds = accumulatedUsage.get(appName) || 0;
       const monthlyCost = getMonthlyCost(appName, index);
       const isReclaimable = totalRuntimeSeconds < RECLAIMABLE_THRESHOLD_SECONDS;
 
       return {
         appName,
+        ...appIdentity,
         pcName: currentPcName,
-        icon: getAppIcon(appName),
+        icon: getAppIcon(appIdentity.displayName),
         status: isReclaimable ? 'Reclaimable' : 'Active',
         totalRuntimeSeconds,
         monthlyCost,
@@ -285,6 +397,22 @@ export default function App() {
       url,
       total_runtime_seconds: accumulatedUsage.get(`url:${url}`) || 0,
     }));
+  }, [config, accumulatedUsage]);
+
+  const usageByExtension = useMemo(() => {
+    if (!config?.extensions) return [];
+
+    return getUniqueExtensionRules(config.extensions).map((extension, index) => {
+      const totalRuntimeSeconds = accumulatedUsage.get(extension.name) || 0;
+
+      return {
+        ...extension,
+        icon: getAppIcon(extension.name),
+        monthlyCost: getExtensionMonthlyCost(extension.name, index),
+        status: totalRuntimeSeconds > 0 ? 'Detected' : 'Watching',
+        totalRuntimeSeconds,
+      };
+    });
   }, [config, accumulatedUsage]);
 
   const aggregates = useMemo(() => {
@@ -303,6 +431,9 @@ export default function App() {
     );
     const activeSeats = usageByApp.filter((entry) => entry.status === 'Active').length;
     const totalSeats = usageByApp.length;
+    const activeExtensions = usageByExtension.filter(
+      (entry) => entry.totalRuntimeSeconds > 0
+    ).length;
     const licenseEfficiencyScore =
       totalSeats > 0 ? Math.round((activeSeats / totalSeats) * 100) : 0;
 
@@ -313,9 +444,11 @@ export default function App() {
       trackedMonthlyCost,
       activeSeats,
       totalSeats,
+      activeExtensions,
+      totalExtensions: usageByExtension.length,
       licenseEfficiencyScore,
     };
-  }, [usageByApp]);
+  }, [usageByApp, usageByExtension]);
 
   const sortedUsageByApp = useMemo(() => {
     const sortableRows = [...usageByApp];
@@ -436,6 +569,7 @@ export default function App() {
     }
 
     return selectedDevice.trackedApps.map((appName, index) => {
+      const appIdentity = getReadableAppIdentity(appName);
       const monthlyCost = getMonthlyCost(appName, index);
       const totalRuntimeSeconds = selectedDevice.isLive
         ? (index + 1) * 1880
@@ -443,7 +577,8 @@ export default function App() {
 
       return {
         appName,
-        icon: getAppIcon(appName),
+        ...appIdentity,
+        icon: getAppIcon(appIdentity.displayName),
         status:
           selectedDevice.isLive && totalRuntimeSeconds >= RECLAIMABLE_THRESHOLD_SECONDS
             ? 'Active'
@@ -509,6 +644,37 @@ export default function App() {
     }, 1600);
   };
 
+  const handleDeployInputChange = (event) => {
+    const { name, value } = event.target;
+    setDeployForm((currentForm) => ({
+      ...currentForm,
+      [name]: value,
+    }));
+  };
+
+  const handleDeployAgent = (event) => {
+    event.preventDefault();
+
+    const normalizedPcName = deployForm.pcName.trim().toUpperCase();
+    if (!normalizedPcName) {
+      setDeployTarget('Enter a PC name to prepare deployment.');
+      return;
+    }
+
+    setIsDeployingAgent(true);
+    setDeployTarget(`Preparing deployment for ${normalizedPcName}`);
+
+    window.setTimeout(() => {
+      setIsDeployingAgent(false);
+      setDeployTarget(`Deployment package queued for ${normalizedPcName}`);
+      setDeployForm((currentForm) => ({
+        ...currentForm,
+        pcName: '',
+        user: '',
+      }));
+    }, 1600);
+  };
+
   const handleExploreDevice = (deviceId) => {
     setSelectedDeviceId(deviceId);
     setShowAgentDetails(true);
@@ -535,6 +701,9 @@ export default function App() {
         }
         if (data.tracked_urls && !Array.isArray(data.tracked_urls)) {
           throw new Error('tracked_urls must be an array.');
+        }
+        if (data.extensions && !Array.isArray(data.extensions)) {
+          throw new Error('extensions must be an array.');
         }
         setConfig(data);
         setError('');
@@ -668,6 +837,13 @@ export default function App() {
                 seats
               </small>
             </article>
+            <article className="summary-card">
+              <span>AI Extensions Detected</span>
+              <strong>
+                {aggregates.activeExtensions}/{aggregates.totalExtensions}
+              </strong>
+              <small>Nested extension counters bound to focused parent apps</small>
+            </article>
           </section>
 
           <section className="panel">
@@ -741,7 +917,10 @@ export default function App() {
                       <td>
                         <div className="app-identity">
                           <span className="app-icon">{entry.icon}</span>
-                          <span>{entry.appName}</span>
+                          <span className="app-name-stack">
+                            <strong>{entry.displayName}</strong>
+                            {entry.shouldShowRawName && <small>{entry.rawName}</small>}
+                          </span>
                         </div>
                       </td>
                       <td>
@@ -789,6 +968,67 @@ export default function App() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>AI & Extension Attribution</h2>
+                <p>Nested extension usage is counted only while the host application is focused.</p>
+              </div>
+            </div>
+
+            <div className="extension-grid">
+              {usageByExtension.map((extension) => (
+                <article className="extension-card" key={extension.name}>
+                  <div className="extension-card-header">
+                    <span className="app-icon extension-icon">{extension.icon}</span>
+                    <div>
+                      <h3>{extension.name}</h3>
+                      <small>{extension.parentApps.join(', ')}</small>
+                    </div>
+                    <span
+                      className={`status-badge ${
+                        extension.status === 'Detected'
+                          ? 'status-active'
+                          : 'status-neutral'
+                      }`}
+                    >
+                      {extension.status}
+                    </span>
+                  </div>
+                  <div className="extension-runtime">
+                    <div>
+                      <span>Runtime</span>
+                      <strong>{formatRuntime(extension.totalRuntimeSeconds)}</strong>
+                    </div>
+                    <div>
+                      <span>Monthly cost</span>
+                      <strong>{formatCurrency(extension.monthlyCost)}</strong>
+                    </div>
+                  </div>
+                  <div className="signature-list">
+                    {extension.identifiers.length > 0 && (
+                      <div>
+                        <span>Any signature</span>
+                        <small>{extension.identifiers.join(', ')}</small>
+                      </div>
+                    )}
+                    {extension.matchAll.length > 0 && (
+                      <div>
+                        <span>Required bridge</span>
+                        <small>{extension.matchAll.join(' + ')}</small>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {usageByExtension.length === 0 && (
+                <div className="empty-inline">
+                  Waiting for extension attribution rules from the agent.
+                </div>
+              )}
             </div>
           </section>
 
@@ -975,6 +1215,69 @@ export default function App() {
             </article>
           </section>
 
+          <section className="panel deploy-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Deploy Agent to New PC</h2>
+                <p>Prepare an installer assignment for a new endpoint before it joins the monitored fleet.</p>
+              </div>
+              {deployTarget && (
+                <span className="deployment-status">{deployTarget}</span>
+              )}
+            </div>
+            <form className="deploy-form" onSubmit={handleDeployAgent}>
+              <label>
+                <span>PC Name</span>
+                <input
+                  name="pcName"
+                  placeholder="ENG-PC-045"
+                  type="text"
+                  value={deployForm.pcName}
+                  onChange={handleDeployInputChange}
+                />
+              </label>
+              <label>
+                <span>Assigned User</span>
+                <input
+                  name="user"
+                  placeholder="User name"
+                  type="text"
+                  value={deployForm.user}
+                  onChange={handleDeployInputChange}
+                />
+              </label>
+              <label>
+                <span>Policy</span>
+                <select
+                  name="policy"
+                  value={deployForm.policy}
+                  onChange={handleDeployInputChange}
+                >
+                  <option>Finance baseline</option>
+                  <option>Design suite</option>
+                  <option>Engineering tools</option>
+                </select>
+              </label>
+              <button
+                className="deploy-agent-button"
+                disabled={isDeployingAgent}
+                type="submit"
+              >
+                {isDeployingAgent ? (
+                  <>
+                    <span className="button-spinner" />
+                    Deploying
+                  </>
+                ) : (
+                  <>
+                    <span className="action-symbol">+</span>
+                    Deploy Agent
+                  </>
+                )}
+              </button>
+            </form>
+          </section>
+
           <section className="panel">
             <div className="panel-header">
               <div>
@@ -1142,8 +1445,9 @@ export default function App() {
                       <div className="tracked-app-item" key={entry.appName}>
                         <span className="app-icon">{entry.icon}</span>
                         <div>
-                          <strong>{entry.appName}</strong>
+                          <strong>{entry.displayName}</strong>
                           <small>
+                            {entry.shouldShowRawName && `${entry.rawName} - `}
                             {formatRuntime(entry.totalRuntimeSeconds)} tracked,
                             {` ${formatCurrency(entry.monthlyCost)}`} monthly cost
                           </small>
@@ -1192,9 +1496,47 @@ export default function App() {
                         <strong>{usageByUrl.length}</strong>
                       </div>
                     )}
+                    {selectedDevice.id === 'laptop-dx01' && usageByExtension.length > 0 && (
+                      <div>
+                        <span>AI extensions detected</span>
+                        <strong>
+                          {aggregates.activeExtensions}/{aggregates.totalExtensions}
+                        </strong>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
+
+              {selectedDevice.id === 'laptop-dx01' && usageByExtension.length > 0 && (
+                <div className="detail-extension-section">
+                  <h3>Nested AI Extension Attribution</h3>
+                  <div className="tracked-app-list">
+                    {usageByExtension.map((extension) => (
+                      <div className="tracked-app-item" key={extension.name}>
+                        <span className="app-icon extension-icon">{extension.icon}</span>
+                        <div>
+                          <strong>{extension.name}</strong>
+                          <small>
+                            {formatRuntime(extension.totalRuntimeSeconds)} tracked under{' '}
+                            {extension.parentApps.join(', ')} -{' '}
+                            {formatCurrency(extension.monthlyCost)} monthly cost
+                          </small>
+                        </div>
+                        <span
+                          className={`status-badge ${
+                            extension.status === 'Detected'
+                              ? 'status-active'
+                              : 'status-neutral'
+                          }`}
+                        >
+                          {extension.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
         )}
       </main>
