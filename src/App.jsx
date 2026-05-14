@@ -2,10 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
   Legend,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -33,10 +38,15 @@ const pricingMap = {
   Zoom: 16,
   Chrome: 0,
   Firefox: 0,
+  Postman: 19,
+  Notepad: 0,
+  'Notepad++': 0,
+  Docker: 24,
 };
 
 const fallbackCosts = [150, 95, 72, 49, 29, 18];
 const fallbackExtensionCosts = [19, 12, 20, 10];
+const fallbackDiscoveredAppCosts = [0];
 
 const extensionPricingMap = {
   'github-copilot': 19,
@@ -49,6 +59,18 @@ const extensionPricingMap = {
   'claude code': 20,
   cline: 15,
   'gemini code assist': 19,
+};
+
+const aiModelSubscriptionMap = {
+  'configured-in-tool': 'Configured in tool',
+  'gpt-4o': 'OpenAI paid API',
+  'gpt-4.1': 'OpenAI paid API',
+  'gpt-5': 'OpenAI paid API',
+  'claude-3.5-sonnet': 'Claude Pro / Team',
+  'claude-3-5-sonnet': 'Claude Pro / Team',
+  'claude-sonnet-4': 'Claude Pro / Team',
+  'gemini-1.5-pro': 'Google AI paid tier',
+  'gemini-2.5-pro': 'Google AI paid tier',
 };
 
 const appDisplayNames = {
@@ -68,6 +90,12 @@ const appDisplayNames = {
   chrome: 'Google Chrome',
   'firefox.exe': 'Mozilla Firefox',
   firefox: 'Mozilla Firefox',
+  'postman.exe': 'Postman',
+  postman: 'Postman',
+  'notepad.exe': 'Notepad',
+  notepad: 'Notepad',
+  'notepad++.exe': 'Notepad++',
+  'docker desktop.exe': 'Docker Desktop',
 };
 
 const usageHistory = Array.from({ length: 30 }, (_, index) => {
@@ -135,6 +163,213 @@ const mockFleetDevices = [
   },
 ];
 
+const cloudProviderColors = {
+  AWS: '#ff9900',
+  Azure: '#0078d4',
+  GCP: '#34a853',
+};
+
+const cloudInventory = [
+  {
+    id: 'aws-prod-api-01',
+    provider: 'AWS',
+    name: 'prod-api-m5-xlarge',
+    region: 'us-east-1',
+    type: 'EC2',
+    department: 'Engineering',
+    monthlyBurn: 312,
+    cpuUtilization: 4,
+    memoryUtilization: 18,
+  },
+  {
+    id: 'aws-prod-db-01',
+    provider: 'AWS',
+    name: 'prod-db-instance',
+    region: 'us-east-1',
+    type: 'RDS',
+    department: 'Engineering',
+    monthlyBurn: 640,
+    cpuUtilization: 52,
+    memoryUtilization: 68,
+  },
+  {
+    id: 'aws-marketing-assets',
+    provider: 'AWS',
+    name: 'marketing-asset-bucket',
+    region: 'us-west-2',
+    type: 'S3',
+    department: 'Marketing',
+    monthlyBurn: 94,
+    cpuUtilization: 0,
+    memoryUtilization: 0,
+  },
+  {
+    id: 'azure-qa-runner-02',
+    provider: 'Azure',
+    name: 'qa-runner-d4s-vm',
+    region: 'eastus',
+    type: 'Virtual Machine',
+    department: 'QA',
+    monthlyBurn: 228,
+    cpuUtilization: 8,
+    memoryUtilization: 21,
+  },
+  {
+    id: 'azure-sql-finance',
+    provider: 'Azure',
+    name: 'finance-sql-managed',
+    region: 'centralus',
+    type: 'Azure SQL',
+    department: 'Finance',
+    monthlyBurn: 410,
+    cpuUtilization: 35,
+    memoryUtilization: 48,
+  },
+  {
+    id: 'azure-cdn-market',
+    provider: 'Azure',
+    name: 'campaign-cdn-profile',
+    region: 'westus2',
+    type: 'CDN',
+    department: 'Marketing',
+    monthlyBurn: 126,
+    cpuUtilization: 0,
+    memoryUtilization: 0,
+  },
+  {
+    id: 'gcp-ml-worker-01',
+    provider: 'GCP',
+    name: 'ml-worker-n2-standard',
+    region: 'us-central1',
+    type: 'Compute Engine',
+    department: 'Engineering',
+    monthlyBurn: 288,
+    cpuUtilization: 6,
+    memoryUtilization: 24,
+  },
+  {
+    id: 'gcp-analytics-sql',
+    provider: 'GCP',
+    name: 'analytics-cloud-sql',
+    region: 'us-east4',
+    type: 'Cloud SQL',
+    department: 'QA',
+    monthlyBurn: 356,
+    cpuUtilization: 41,
+    memoryUtilization: 59,
+  },
+  {
+    id: 'gcp-public-logs',
+    provider: 'GCP',
+    name: 'public-log-archive',
+    region: 'europe-west1',
+    type: 'Cloud Storage',
+    department: 'Security',
+    monthlyBurn: 78,
+    cpuUtilization: 0,
+    memoryUtilization: 0,
+  },
+];
+
+const zombieCloudAssets = [
+  {
+    id: 'zombie-ebs-01',
+    provider: 'AWS',
+    resourceName: 'vol-0f92-prod-orphan',
+    region: 'us-east-1',
+    type: 'Unattached EBS Volume',
+    monthlyBurn: 46,
+    reason: 'Detached for 19 days with no snapshot dependency',
+  },
+  {
+    id: 'zombie-alb-01',
+    provider: 'AWS',
+    resourceName: 'legacy-checkout-alb',
+    region: 'us-west-2',
+    type: 'Idle Load Balancer',
+    monthlyBurn: 31,
+    reason: 'Zero healthy targets and no requests in 14 days',
+  },
+  {
+    id: 'zombie-eip-01',
+    provider: 'AWS',
+    resourceName: 'eipalloc-08c1-unused',
+    region: 'us-east-1',
+    type: 'Unused Elastic IP',
+    monthlyBurn: 12,
+    reason: 'Allocated but not associated to any network interface',
+  },
+  {
+    id: 'zombie-azure-disk-01',
+    provider: 'Azure',
+    resourceName: 'qa-temp-osdisk-2024',
+    region: 'eastus',
+    type: 'Unattached Managed Disk',
+    monthlyBurn: 39,
+    reason: 'Disk owner VM deleted, disk still billing',
+  },
+  {
+    id: 'zombie-gcp-ip-01',
+    provider: 'GCP',
+    resourceName: 'staging-static-ip',
+    region: 'us-central1',
+    type: 'Unused Static IP',
+    monthlyBurn: 15,
+    reason: 'Reserved address with no forwarding rule or VM',
+  },
+];
+
+const rightSizingRecommendations = [
+  {
+    id: 'rightsize-api',
+    provider: 'AWS',
+    resourceName: 'prod-api-m5-xlarge',
+    currentSize: 'EC2 m5.xlarge',
+    recommendation: 'Switch to t3.medium',
+    cpuUtilization: 4,
+    monthlySavings: 84,
+  },
+  {
+    id: 'rightsize-qa',
+    provider: 'Azure',
+    resourceName: 'qa-runner-d4s-vm',
+    currentSize: 'D4s v5 VM',
+    recommendation: 'Downgrade to B2ms',
+    cpuUtilization: 8,
+    monthlySavings: 62,
+  },
+  {
+    id: 'rightsize-ml',
+    provider: 'GCP',
+    resourceName: 'ml-worker-n2-standard',
+    currentSize: 'n2-standard-8',
+    recommendation: 'Move to e2-standard-2',
+    cpuUtilization: 6,
+    monthlySavings: 74,
+  },
+];
+
+const cloudConnectors = [
+  {
+    provider: 'AWS',
+    account: 'prod-finops-9842',
+    status: 'Connected',
+    lastSync: '4 min ago',
+  },
+  {
+    provider: 'Azure',
+    account: 'corp-subscription-east',
+    status: 'Syncing',
+    lastSync: 'running now',
+  },
+  {
+    provider: 'GCP',
+    account: 'agentops-shared-vpc',
+    status: 'Auth Error',
+    lastSync: '2h ago',
+  },
+];
+
 function formatRuntime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
@@ -159,6 +394,31 @@ function formatNumber(value) {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function getUtilizationStatus(cpuUtilization, memoryUtilization) {
+  if (cpuUtilization < 10 && memoryUtilization < 25) {
+    return {
+      label: 'Low Utilization',
+      className: 'utilization-low',
+    };
+  }
+
+  if (cpuUtilization >= 35 || memoryUtilization >= 45) {
+    return {
+      label: 'Optimized',
+      className: 'utilization-optimized',
+    };
+  }
+
+  return {
+    label: 'Watch',
+    className: 'utilization-watch',
+  };
+}
+
+function getCloudProviderClass(provider) {
+  return `provider-${provider.toLowerCase()}`;
 }
 
 function HistoricalTooltip({ active, payload, label }) {
@@ -249,6 +509,35 @@ function getExtensionMonthlyCost(extensionName, index) {
   return fallbackExtensionCosts[index % fallbackExtensionCosts.length];
 }
 
+function getConfiguredModelSubscriptionTypes(extension, modelName) {
+  const modelSpecificTypes = extension.aiModelLicenseTypes?.[modelName];
+  if (modelSpecificTypes?.length > 0) return modelSpecificTypes;
+
+  const normalizedModelName = modelName.toLowerCase();
+  const matchingKey = Object.keys(aiModelSubscriptionMap).find((key) =>
+    normalizedModelName.includes(key)
+  );
+
+  if (matchingKey) {
+    return [aiModelSubscriptionMap[matchingKey]];
+  }
+
+  return ['Subscription not reported'];
+}
+
+function getDiscoveredAppMonthlyCost(appName, index) {
+  const normalizedName = appName.toLowerCase();
+  const matchingKey = Object.keys(pricingMap).find((key) =>
+    normalizedName.includes(key.toLowerCase())
+  );
+
+  if (matchingKey) {
+    return pricingMap[matchingKey];
+  }
+
+  return fallbackDiscoveredAppCosts[index % fallbackDiscoveredAppCosts.length];
+}
+
 function getAppIcon(appName) {
   return appName
     .split(/\s+/)
@@ -303,12 +592,41 @@ function getUniqueExtensionRules(extensions = []) {
     const existing = extensionMap.get(key) || {
       name: extension.name,
       parentApps: [],
+      aiModels: [],
+      aiModelLicenseTypes: {},
       identifiers: [],
       matchAll: [],
     };
 
     if (extension.parent_app && !existing.parentApps.includes(extension.parent_app)) {
       existing.parentApps.push(extension.parent_app);
+    }
+
+    if (extension.ai_model && !existing.aiModels.includes(extension.ai_model)) {
+      existing.aiModels.push(extension.ai_model);
+    }
+
+    if (extension.ai_model) {
+      const licenseType =
+        extension.ai_model_subscription ||
+        extension.ai_model_license_type ||
+        extension.ai_model_licence_type ||
+        extension.subscription_type ||
+        extension.license_type ||
+        extension.licence_type ||
+        extension.plan ||
+        extension.tier;
+
+      if (licenseType) {
+        const existingLicenseTypes =
+          existing.aiModelLicenseTypes[extension.ai_model] || [];
+
+        if (!existingLicenseTypes.includes(licenseType)) {
+          existingLicenseTypes.push(licenseType);
+        }
+
+        existing.aiModelLicenseTypes[extension.ai_model] = existingLicenseTypes;
+      }
     }
 
     (extension.identifiers || []).forEach((identifier) => {
@@ -327,6 +645,57 @@ function getUniqueExtensionRules(extensions = []) {
   });
 
   return Array.from(extensionMap.values());
+}
+
+function getModelUsageForExtension(usageMap, extensionName) {
+  const usagePrefix = `ai_model:${extensionName}:`;
+
+  return Array.from(usageMap.entries())
+    .filter(([appName]) => appName.startsWith(usagePrefix))
+    .map(([appName, totalRuntimeSeconds]) => ({
+      name: appName.slice(usagePrefix.length),
+      totalRuntimeSeconds,
+    }))
+    .sort((firstModel, secondModel) =>
+      secondModel.totalRuntimeSeconds - firstModel.totalRuntimeSeconds
+    );
+}
+
+function getDetectedPcNamesForUsage(history, appName) {
+  const detectedPcNames = new Set();
+
+  history.forEach((payload) => {
+    const hasUsage = (payload.usage || []).some(
+      (entry) => entry.app_name === appName && entry.total_runtime_seconds > 0
+    );
+
+    if (hasUsage) {
+      detectedPcNames.add(getTelemetryPcName(payload));
+    }
+  });
+
+  return Array.from(detectedPcNames).sort();
+}
+
+function getModelLicenseBreakdown(extension) {
+  const activeModelNames = extension.modelUsage
+    .filter((model) => model.totalRuntimeSeconds > 0)
+    .map((model) => model.name);
+  const modelNames =
+    activeModelNames.length > 0 ? activeModelNames : extension.aiModels;
+
+  if (modelNames.length === 0) {
+    return [];
+  }
+
+  return modelNames.flatMap((modelName) =>
+    getConfiguredModelSubscriptionTypes(extension, modelName).map(
+      (subscriptionType) => ({
+        name: modelName,
+        subscriptionType,
+      })
+    )
+  );
 }
 
 export default function App() {
@@ -351,6 +720,29 @@ export default function App() {
     key: 'savingsOpportunity',
     direction: 'desc',
   });
+  const [cloudProviderFilter, setCloudProviderFilter] = useState('All');
+  const [cloudRegionFilter, setCloudRegionFilter] = useState('All');
+
+  const heroCopy = {
+    dashboard: {
+      eyebrow: 'License intelligence',
+      title: 'Software Utilization Command Center',
+      description:
+        'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
+    },
+    'agent-management': {
+      eyebrow: 'Fleet management',
+      title: 'Agent Management',
+      description:
+        'Monitor endpoint health, active expensive licenses, and redeploy agents from one operational view.',
+    },
+    'cloud-asset-management': {
+      eyebrow: 'Cloud FinOps',
+      title: 'Cloud Asset Management',
+      description:
+        'A single pane of glass for multi-cloud inventory, spend exposure, zombie assets, and right-sizing actions.',
+    },
+  }[activeView];
 
   const accumulatedUsage = useMemo(() => {
     const usageMap = new Map();
@@ -404,16 +796,106 @@ export default function App() {
 
     return getUniqueExtensionRules(config.extensions).map((extension, index) => {
       const totalRuntimeSeconds = accumulatedUsage.get(extension.name) || 0;
+      const unitMonthlyCost = getExtensionMonthlyCost(extension.name, index);
+      const detectedPcNames = getDetectedPcNamesForUsage(
+        telemetryHistory,
+        extension.name
+      );
+      const detectedSeatCount =
+        detectedPcNames.length > 0 || totalRuntimeSeconds === 0
+          ? detectedPcNames.length
+          : 1;
+      const modelUsage = getModelUsageForExtension(accumulatedUsage, extension.name);
+      const activeModelNames = modelUsage
+        .filter((model) => model.totalRuntimeSeconds > 0)
+        .map((model) => model.name);
+      const modelLicenseBreakdown = getModelLicenseBreakdown({
+        ...extension,
+        modelUsage,
+        aiModels: extension.aiModels,
+      });
 
       return {
         ...extension,
         icon: getAppIcon(extension.name),
-        monthlyCost: getExtensionMonthlyCost(extension.name, index),
+        unitMonthlyCost,
+        monthlyCost: unitMonthlyCost * detectedSeatCount,
+        detectedPcNames,
+        detectedSeatCount,
+        activeModelNames,
+        modelUsage,
+        modelLicenseBreakdown,
         status: totalRuntimeSeconds > 0 ? 'Detected' : 'Watching',
         totalRuntimeSeconds,
       };
     });
-  }, [config, accumulatedUsage]);
+  }, [config, accumulatedUsage, telemetryHistory]);
+
+  const discoveredApplications = useMemo(() => {
+    if (!config) return [];
+
+    const trackedUrlNames = new Set(
+      (config.tracked_urls || []).map((url) => `url:${url}`)
+    );
+    const extensionNames = new Set(
+      getUniqueExtensionRules(config.extensions || []).map((extension) => extension.name)
+    );
+    const appMap = new Map();
+
+    (config.licensed_apps || []).forEach((appName, index) => {
+      const appIdentity = getReadableAppIdentity(appName);
+      const totalRuntimeSeconds = accumulatedUsage.get(appName) || 0;
+      const unitMonthlyCost = getMonthlyCost(appName, index);
+      const detectedPcNames = getDetectedPcNamesForUsage(telemetryHistory, appName);
+      const detectedSeatCount = detectedPcNames.length;
+
+      appMap.set(appName, {
+        appName,
+        ...appIdentity,
+        category: 'Licensed app',
+        icon: getAppIcon(appIdentity.displayName),
+        unitMonthlyCost,
+        monthlyCost: unitMonthlyCost * detectedSeatCount,
+        detectedPcNames,
+        detectedSeatCount,
+        totalRuntimeSeconds,
+      });
+    });
+
+    Array.from(accumulatedUsage.entries()).forEach(([appName, totalRuntimeSeconds], index) => {
+      if (totalRuntimeSeconds <= 0) return;
+      if (appMap.has(appName)) return;
+      if (appName.startsWith('url:')) return;
+      if (appName.startsWith('ai_model:')) return;
+      if (trackedUrlNames.has(appName)) return;
+      if (extensionNames.has(appName)) return;
+
+      const appIdentity = getReadableAppIdentity(appName);
+      const unitMonthlyCost = getDiscoveredAppMonthlyCost(appName, index);
+      const detectedPcNames = getDetectedPcNamesForUsage(telemetryHistory, appName);
+      const detectedSeatCount = detectedPcNames.length > 0 ? detectedPcNames.length : 1;
+
+      appMap.set(appName, {
+        appName,
+        ...appIdentity,
+        category: 'Discovered app',
+        icon: getAppIcon(appIdentity.displayName),
+        unitMonthlyCost,
+        monthlyCost: unitMonthlyCost * detectedSeatCount,
+        detectedPcNames,
+        detectedSeatCount,
+        totalRuntimeSeconds,
+      });
+    });
+
+    return Array.from(appMap.values())
+      .sort(
+        (firstApp, secondApp) =>
+          secondApp.monthlyCost - firstApp.monthlyCost ||
+          secondApp.totalRuntimeSeconds - firstApp.totalRuntimeSeconds ||
+          firstApp.displayName.localeCompare(secondApp.displayName)
+      );
+  }, [config, accumulatedUsage, telemetryHistory]);
 
   const aggregates = useMemo(() => {
     const totalWaste = usageByApp.reduce(
@@ -434,6 +916,41 @@ export default function App() {
     const activeExtensions = usageByExtension.filter(
       (entry) => entry.totalRuntimeSeconds > 0
     ).length;
+    const totalExtensionRuntimeSeconds = usageByExtension.reduce(
+      (sum, entry) => sum + entry.totalRuntimeSeconds,
+      0
+    );
+    const totalExtensionMonthlyCost = usageByExtension.reduce(
+      (sum, entry) => sum + entry.monthlyCost,
+      0
+    );
+    const modelRuntimeMap = new Map();
+    const configuredModelCounts = new Map();
+
+    usageByExtension.forEach((extension) => {
+      extension.modelUsage.forEach((model) => {
+        modelRuntimeMap.set(
+          model.name,
+          (modelRuntimeMap.get(model.name) || 0) + model.totalRuntimeSeconds
+        );
+      });
+
+      extension.aiModels.forEach((modelName) => {
+        configuredModelCounts.set(
+          modelName,
+          (configuredModelCounts.get(modelName) || 0) + 1
+        );
+      });
+    });
+
+    const topRuntimeModel = Array.from(modelRuntimeMap.entries()).sort(
+      (firstModel, secondModel) => secondModel[1] - firstModel[1]
+    )[0];
+    const topConfiguredModel = Array.from(configuredModelCounts.entries()).sort(
+      (firstModel, secondModel) => secondModel[1] - firstModel[1]
+    )[0];
+    const primarySelectedModel =
+      topRuntimeModel?.[0] || topConfiguredModel?.[0] || 'Unknown';
     const licenseEfficiencyScore =
       totalSeats > 0 ? Math.round((activeSeats / totalSeats) * 100) : 0;
 
@@ -446,9 +963,36 @@ export default function App() {
       totalSeats,
       activeExtensions,
       totalExtensions: usageByExtension.length,
+      totalExtensionRuntimeSeconds,
+      totalExtensionMonthlyCost,
+      primarySelectedModel,
       licenseEfficiencyScore,
     };
   }, [usageByApp, usageByExtension]);
+
+  const extensionAttributionRows = useMemo(
+    () =>
+      usageByExtension.flatMap((extension) => {
+        if (extension.modelLicenseBreakdown.length === 0) {
+          return [
+            {
+              ...extension,
+              rowId: `${extension.name}:unknown:unknown`,
+              modelName: 'unknown',
+              subscriptionType: 'Subscription not reported',
+            },
+          ];
+        }
+
+        return extension.modelLicenseBreakdown.map((model) => ({
+          ...extension,
+          rowId: `${extension.name}:${model.name}:${model.subscriptionType}`,
+          modelName: model.name,
+          subscriptionType: model.subscriptionType,
+        }));
+      }),
+    [usageByExtension]
+  );
 
   const sortedUsageByApp = useMemo(() => {
     const sortableRows = [...usageByApp];
@@ -616,6 +1160,82 @@ export default function App() {
       totalDevices: fleetDevices.length,
     };
   }, [fleetDevices]);
+
+  const cloudRegionOptions = useMemo(
+    () => Array.from(new Set(cloudInventory.map((resource) => resource.region))).sort(),
+    []
+  );
+
+  const filteredCloudInventory = useMemo(
+    () =>
+      cloudInventory.filter((resource) => {
+        const matchesProvider =
+          cloudProviderFilter === 'All' || resource.provider === cloudProviderFilter;
+        const matchesRegion =
+          cloudRegionFilter === 'All' || resource.region === cloudRegionFilter;
+
+        return matchesProvider && matchesRegion;
+      }),
+    [cloudProviderFilter, cloudRegionFilter]
+  );
+
+  const cloudSpendByProvider = useMemo(
+    () =>
+      Object.entries(
+        cloudInventory.reduce((providerMap, resource) => {
+          providerMap[resource.provider] =
+            (providerMap[resource.provider] || 0) + resource.monthlyBurn;
+          return providerMap;
+        }, {})
+      ).map(([provider, value]) => ({
+        provider,
+        value,
+      })),
+    []
+  );
+
+  const cloudSpendByDepartment = useMemo(() => {
+    const departmentMap = new Map();
+
+    cloudInventory.forEach((resource) => {
+      const existing = departmentMap.get(resource.department) || {
+        department: resource.department,
+        AWS: 0,
+        Azure: 0,
+        GCP: 0,
+      };
+
+      existing[resource.provider] += resource.monthlyBurn;
+      departmentMap.set(resource.department, existing);
+    });
+
+    return Array.from(departmentMap.values()).sort((firstDept, secondDept) =>
+      firstDept.department.localeCompare(secondDept.department)
+    );
+  }, []);
+
+  const cloudSummary = useMemo(() => {
+    const monthlyBurn = cloudInventory.reduce(
+      (sum, resource) => sum + resource.monthlyBurn,
+      0
+    );
+    const zombieWaste = zombieCloudAssets.reduce(
+      (sum, resource) => sum + resource.monthlyBurn,
+      0
+    );
+    const rightSizingSavings = rightSizingRecommendations.reduce(
+      (sum, recommendation) => sum + recommendation.monthlySavings,
+      0
+    );
+
+    return {
+      monthlyBurn,
+      projectedAnnualCost: monthlyBurn * 12,
+      zombieWaste,
+      rightSizingSavings,
+      resourceCount: cloudInventory.length,
+    };
+  }, []);
 
   const requestSort = (key) => {
     setSortConfig((currentSort) => ({
@@ -790,27 +1410,29 @@ export default function App() {
           >
             Agent Management
           </button>
+          <button
+            className={
+              activeView === 'cloud-asset-management'
+                ? 'nav-link active'
+                : 'nav-link'
+            }
+            type="button"
+            onClick={() => {
+              setActiveView('cloud-asset-management');
+              setShowAgentDetails(false);
+            }}
+          >
+            Cloud Asset Management
+          </button>
         </div>
       </nav>
 
       <main className="main-content">
         <header className="hero">
           <div>
-            <p className="eyebrow">
-              {activeView === 'dashboard'
-                ? 'License intelligence'
-                : 'Fleet management'}
-            </p>
-            <h1>
-              {activeView === 'dashboard'
-                ? 'Software Utilization Command Center'
-                : 'Agent Management'}
-            </h1>
-            <p>
-              {activeView === 'dashboard'
-                ? 'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.'
-                : 'Monitor endpoint health, active expensive licenses, and redeploy agents from one operational view.'}
-            </p>
+            <p className="eyebrow">{heroCopy.eyebrow}</p>
+            <h1>{heroCopy.title}</h1>
+            <p>{heroCopy.description}</p>
           </div>
         </header>
 
@@ -979,56 +1601,162 @@ export default function App() {
               </div>
             </div>
 
-            <div className="extension-grid">
-              {usageByExtension.map((extension) => (
-                <article className="extension-card" key={extension.name}>
-                  <div className="extension-card-header">
-                    <span className="app-icon extension-icon">{extension.icon}</span>
-                    <div>
-                      <h3>{extension.name}</h3>
-                      <small>{extension.parentApps.join(', ')}</small>
-                    </div>
-                    <span
-                      className={`status-badge ${
-                        extension.status === 'Detected'
-                          ? 'status-active'
-                          : 'status-neutral'
-                      }`}
-                    >
-                      {extension.status}
-                    </span>
-                  </div>
-                  <div className="extension-runtime">
-                    <div>
-                      <span>Runtime</span>
-                      <strong>{formatRuntime(extension.totalRuntimeSeconds)}</strong>
-                    </div>
-                    <div>
-                      <span>Monthly cost</span>
-                      <strong>{formatCurrency(extension.monthlyCost)}</strong>
-                    </div>
-                  </div>
-                  <div className="signature-list">
-                    {extension.identifiers.length > 0 && (
-                      <div>
-                        <span>Any signature</span>
-                        <small>{extension.identifiers.join(', ')}</small>
-                      </div>
-                    )}
-                    {extension.matchAll.length > 0 && (
-                      <div>
-                        <span>Required bridge</span>
-                        <small>{extension.matchAll.join(' + ')}</small>
-                      </div>
-                    )}
-                  </div>
-                </article>
-              ))}
-              {usageByExtension.length === 0 && (
-                <div className="empty-inline">
-                  Waiting for extension attribution rules from the agent.
-                </div>
-              )}
+            <div className="extension-summary-grid" aria-label="AI extension summary">
+              <div>
+                <span>Overall monthly cost</span>
+                <strong>{formatCurrency(aggregates.totalExtensionMonthlyCost)}</strong>
+              </div>
+              <div>
+                <span>Total runtime</span>
+                <strong>{formatRuntime(aggregates.totalExtensionRuntimeSeconds)}</strong>
+              </div>
+              <div>
+                <span>Mostly selected model</span>
+                <strong>{aggregates.primarySelectedModel}</strong>
+              </div>
+            </div>
+
+            <div className="table-wrap attribution-table-wrap">
+              <table className="attribution-table extension-attribution-table">
+                <thead>
+                  <tr>
+                    <th>Extension Identity</th>
+                    <th>Subscription Type</th>
+                    <th>Status</th>
+                    <th>Total Runtime</th>
+                    <th>Fleet Monthly Cost</th>
+                    <th>Unit Monthly Cost</th>
+                    <th>Discovered PCs</th>
+                    <th>Selected Model</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {extensionAttributionRows.map((extension) => (
+                    <tr key={extension.rowId}>
+                      <td>
+                        <div className="app-identity">
+                          <span className="app-icon extension-icon">
+                            {extension.icon}
+                          </span>
+                          <span className="app-name-stack">
+                            <strong>{extension.name}</strong>
+                            <small>{extension.parentApps.join(', ')}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="pc-list">
+                          {extension.subscriptionType}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className={`status-badge ${
+                            extension.status === 'Detected'
+                              ? 'status-active'
+                              : 'status-neutral'
+                          }`}
+                        >
+                          {extension.status}
+                        </span>
+                      </td>
+                      <td>{formatRuntime(extension.totalRuntimeSeconds)}</td>
+                      <td>{formatCurrency(extension.monthlyCost)}</td>
+                      <td>{formatCurrency(extension.unitMonthlyCost)} / PC</td>
+                      <td>
+                        <span className="pc-list">
+                          {extension.detectedSeatCount > 0
+                            ? `${extension.detectedSeatCount} PC${
+                                extension.detectedSeatCount === 1 ? '' : 's'
+                              } (${extension.detectedPcNames.join(', ')})`
+                            : 'none yet'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="pc-list">
+                          {extension.modelName}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {extensionAttributionRows.length === 0 && (
+                    <tr>
+                      <td colSpan="8" className="empty-state">
+                        Waiting for extension attribution rules from the agent.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Application Attribution</h2>
+                <p>All app identities from licensed configuration plus additional apps discovered in telemetry.</p>
+              </div>
+            </div>
+
+            <div className="table-wrap attribution-table-wrap">
+              <table className="attribution-table">
+                <thead>
+                  <tr>
+                    <th>App Identity</th>
+                    <th>Type</th>
+                    <th>Total Runtime</th>
+                    <th>Fleet Monthly Cost</th>
+                    <th>Unit Monthly Cost</th>
+                    <th>Discovered PCs</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {discoveredApplications.map((app) => (
+                    <tr key={app.appName}>
+                      <td>
+                        <div className="app-identity">
+                          <span className="app-icon">{app.icon}</span>
+                          <span className="app-name-stack">
+                            <strong>{app.displayName}</strong>
+                            {app.shouldShowRawName && <small>{app.rawName}</small>}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          className={`status-badge ${
+                            app.totalRuntimeSeconds > 0
+                              ? 'status-active'
+                              : 'status-neutral'
+                          }`}
+                        >
+                          {app.totalRuntimeSeconds > 0 ? app.category : 'Watching'}
+                        </span>
+                      </td>
+                      <td>{formatRuntime(app.totalRuntimeSeconds)}</td>
+                      <td>{formatCurrency(app.monthlyCost)}</td>
+                      <td>{formatCurrency(app.unitMonthlyCost)} / PC</td>
+                      <td>
+                        <span className="pc-list">
+                          {app.detectedSeatCount} PC
+                          {app.detectedSeatCount === 1 ? '' : 's'}
+                          {app.detectedPcNames.length > 0
+                            ? ` (${app.detectedPcNames.join(', ')})`
+                            : ''}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {discoveredApplications.length === 0 && (
+                    <tr>
+                      <td colSpan="6" className="empty-state">
+                        Waiting for licensed app configuration or application telemetry.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
 
@@ -1187,6 +1915,366 @@ export default function App() {
                         activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
                       />
                     </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </article>
+            </div>
+          </section>
+          </>
+        )}
+
+        {activeView === 'cloud-asset-management' && (
+          <>
+          <section className="summary-grid cloud-summary-grid" aria-label="Cloud financial summary">
+            <article className="summary-card">
+              <span>Monthly Cloud Burn</span>
+              <strong>{formatCurrency(cloudSummary.monthlyBurn)}</strong>
+              <small>{cloudSummary.resourceCount} resources across AWS, Azure, and GCP</small>
+            </article>
+            <article className="summary-card">
+              <span>Projected Annual Cost</span>
+              <strong>{formatCurrency(cloudSummary.projectedAnnualCost)}</strong>
+              <small>Based on current monthly run rate</small>
+            </article>
+            <article className="summary-card summary-card-alert">
+              <span>Zombie Waste</span>
+              <strong>{formatCurrency(cloudSummary.zombieWaste)}</strong>
+              <small>Unattached or idle assets billing this month</small>
+            </article>
+            <article className="summary-card summary-card-success">
+              <span>Right-Size Savings</span>
+              <strong>{formatCurrency(cloudSummary.rightSizingSavings)}</strong>
+              <small>Potential monthly reduction from recommended downgrades</small>
+            </article>
+          </section>
+
+          <section className="panel cloud-connectors-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Cloud Connectors</h2>
+                <p>API account health for provider billing, inventory, and utilization sync.</p>
+              </div>
+            </div>
+            <div className="connector-grid">
+              {cloudConnectors.map((connector) => (
+                <article className="connector-card" key={connector.provider}>
+                  <div className="connector-provider">
+                    <span
+                      className={`provider-icon ${getCloudProviderClass(
+                        connector.provider
+                      )}`}
+                    >
+                      {connector.provider}
+                    </span>
+                    <div>
+                      <strong>{connector.provider}</strong>
+                      <small>{connector.account}</small>
+                    </div>
+                  </div>
+                  <span
+                    className={`connector-status status-${connector.status
+                      .toLowerCase()
+                      .replace(/\s+/g, '-')}`}
+                  >
+                    {connector.status}
+                  </span>
+                  <small>Last sync: {connector.lastSync}</small>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Multi-Cloud Inventory</h2>
+                <p>Provider, region, cost, and utilization posture across live cloud assets.</p>
+              </div>
+              <div className="cloud-filter-actions" aria-label="Cloud inventory filters">
+                <label className="filter-control">
+                  <span>Provider</span>
+                  <select
+                    value={cloudProviderFilter}
+                    onChange={(event) => setCloudProviderFilter(event.target.value)}
+                  >
+                    <option>All</option>
+                    <option>AWS</option>
+                    <option>Azure</option>
+                    <option>GCP</option>
+                  </select>
+                </label>
+                <label className="filter-control">
+                  <span>Region</span>
+                  <select
+                    value={cloudRegionFilter}
+                    onChange={(event) => setCloudRegionFilter(event.target.value)}
+                  >
+                    <option>All</option>
+                    {cloudRegionOptions.map((region) => (
+                      <option key={region}>{region}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="table-wrap cloud-table-wrap">
+              <table className="cloud-inventory-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Resource Name</th>
+                    <th>Region</th>
+                    <th>Resource Type</th>
+                    <th>Monthly Burn Rate</th>
+                    <th>Projected Annual Cost</th>
+                    <th>CPU / Memory</th>
+                    <th>Utilization</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCloudInventory.map((resource) => {
+                    const utilizationStatus = getUtilizationStatus(
+                      resource.cpuUtilization,
+                      resource.memoryUtilization
+                    );
+
+                    return (
+                      <tr key={resource.id}>
+                        <td>
+                          <span className="provider-chip">
+                            <span
+                              className={`provider-dot ${getCloudProviderClass(
+                                resource.provider
+                              )}`}
+                            />
+                            {resource.provider}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="resource-name-stack">
+                            <strong>{resource.name}</strong>
+                            <small>{resource.department}</small>
+                          </div>
+                        </td>
+                        <td>{resource.region}</td>
+                        <td>{resource.type}</td>
+                        <td>{formatCurrency(resource.monthlyBurn)}</td>
+                        <td>{formatCurrency(resource.monthlyBurn * 12)}</td>
+                        <td>
+                          <div className="utilization-stack">
+                            <span>CPU {resource.cpuUtilization}%</span>
+                            <div className="utilization-meter">
+                              <i style={{ width: `${resource.cpuUtilization}%` }} />
+                            </div>
+                            <span>Mem {resource.memoryUtilization}%</span>
+                            <div className="utilization-meter">
+                              <i style={{ width: `${resource.memoryUtilization}%` }} />
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          <span
+                            className={`status-badge ${utilizationStatus.className}`}
+                          >
+                            {utilizationStatus.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredCloudInventory.length === 0 && (
+                    <tr>
+                      <td colSpan="8" className="empty-state">
+                        No cloud resources match the selected provider and region.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel compact-panel zombie-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Waste & Zombie Detector</h2>
+                <p>Unattached, orphaned, and idle assets that are still generating spend.</p>
+              </div>
+              <span className="danger-pill">
+                {formatCurrency(cloudSummary.zombieWaste)} monthly waste
+              </span>
+            </div>
+
+            <div className="table-wrap">
+              <table className="zombie-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Resource</th>
+                    <th>Region</th>
+                    <th>Asset Type</th>
+                    <th>Monthly Waste</th>
+                    <th>Signal</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {zombieCloudAssets.map((asset) => (
+                    <tr key={asset.id}>
+                      <td>
+                        <span className="provider-chip">
+                          <span
+                            className={`provider-dot ${getCloudProviderClass(
+                              asset.provider
+                            )}`}
+                          />
+                          {asset.provider}
+                        </span>
+                      </td>
+                      <td>
+                        <strong>{asset.resourceName}</strong>
+                      </td>
+                      <td>{asset.region}</td>
+                      <td>{asset.type}</td>
+                      <td className="savings-value">{formatCurrency(asset.monthlyBurn)}</td>
+                      <td>
+                        <span className="pc-list">{asset.reason}</span>
+                      </td>
+                      <td>
+                        <button className="reclaim-resource-button" type="button">
+                          Reclaim Resource
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Right-Sizing Recommendation Engine</h2>
+                <p>Commercial downgrade opportunities ranked by utilization and savings impact.</p>
+              </div>
+              <span className="savings-pill">
+                Potential Monthly Savings {formatCurrency(cloudSummary.rightSizingSavings)}
+              </span>
+            </div>
+            <div className="rightsizing-grid">
+              {rightSizingRecommendations.map((recommendation) => (
+                <article className="rightsizing-card" key={recommendation.id}>
+                  <div className="connector-provider">
+                    <span
+                      className={`provider-icon ${getCloudProviderClass(
+                        recommendation.provider
+                      )}`}
+                    >
+                      {recommendation.provider}
+                    </span>
+                    <div>
+                      <strong>{recommendation.resourceName}</strong>
+                      <small>{recommendation.currentSize}</small>
+                    </div>
+                  </div>
+                  <p>
+                    {recommendation.provider} {recommendation.currentSize} is only
+                    using {recommendation.cpuUtilization}% CPU.
+                  </p>
+                  <div className="recommendation-callout">
+                    <span>Recommendation</span>
+                    <strong>{recommendation.recommendation}</strong>
+                  </div>
+                  <div className="rightsizing-savings">
+                    <span>Save</span>
+                    <strong>{formatCurrency(recommendation.monthlySavings)}/mo</strong>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel compact-panel trends-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Global Cloud Spend Visualization</h2>
+                <p>Provider concentration and department ownership across the blended cloud estate.</p>
+              </div>
+            </div>
+            <div className="cloud-visual-grid">
+              <article className="chart-card">
+                <div className="chart-card-header">
+                  <div>
+                    <h3>Spend by Provider</h3>
+                    <p>AWS vs. Azure vs. GCP monthly burn.</p>
+                  </div>
+                </div>
+                <div className="chart-frame">
+                  <ResponsiveContainer width="100%" height={270}>
+                    <PieChart>
+                      <Pie
+                        data={cloudSpendByProvider}
+                        dataKey="value"
+                        nameKey="provider"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={58}
+                        outerRadius={94}
+                        paddingAngle={4}
+                      >
+                        {cloudSpendByProvider.map((entry) => (
+                          <Cell
+                            fill={cloudProviderColors[entry.provider]}
+                            key={entry.provider}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => formatCurrency(value)} />
+                      <Legend content={<ChartLegend />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </article>
+
+              <article className="chart-card">
+                <div className="chart-card-header">
+                  <div>
+                    <h3>Spend by Department</h3>
+                    <p>Stacked monthly burn by owner and provider.</p>
+                  </div>
+                </div>
+                <div className="chart-frame">
+                  <ResponsiveContainer width="100%" height={270}>
+                    <BarChart
+                      data={cloudSpendByDepartment}
+                      margin={{ top: 16, right: 18, left: 0, bottom: 4 }}
+                    >
+                      <CartesianGrid
+                        stroke="#edf2f7"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
+                      <XAxis
+                        dataKey="department"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fill: '#7b8ba0', fontSize: 12 }}
+                      />
+                      <YAxis
+                        tickFormatter={(value) => `$${formatNumber(value)}`}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fill: '#7b8ba0', fontSize: 12 }}
+                        width={58}
+                      />
+                      <Tooltip formatter={(value) => formatCurrency(value)} />
+                      <Legend content={<ChartLegend />} />
+                      <Bar dataKey="AWS" stackId="cloud" fill={cloudProviderColors.AWS} />
+                      <Bar dataKey="Azure" stackId="cloud" fill={cloudProviderColors.Azure} />
+                      <Bar dataKey="GCP" stackId="cloud" fill={cloudProviderColors.GCP} />
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               </article>
@@ -1520,7 +2608,12 @@ export default function App() {
                           <small>
                             {formatRuntime(extension.totalRuntimeSeconds)} tracked under{' '}
                             {extension.parentApps.join(', ')} -{' '}
-                            {formatCurrency(extension.monthlyCost)} monthly cost
+                            {formatCurrency(extension.unitMonthlyCost)} monthly cost - selected model{' '}
+                            {extension.activeModelNames.length > 0
+                              ? extension.activeModelNames.join(', ')
+                              : extension.aiModels.length > 0
+                              ? extension.aiModels.join(', ')
+                              : 'unknown'}
                           </small>
                         </div>
                         <span
