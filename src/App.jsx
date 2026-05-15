@@ -370,6 +370,106 @@ const cloudConnectors = [
   },
 ];
 
+const unifiedSpendTrend = [
+  {
+    month: 'Jan',
+    desktopSoftware: 3650,
+    aiAgents: 780,
+    cloudInfrastructure: 1840,
+  },
+  {
+    month: 'Feb',
+    desktopSoftware: 3780,
+    aiAgents: 910,
+    cloudInfrastructure: 1985,
+  },
+  {
+    month: 'Mar',
+    desktopSoftware: 3920,
+    aiAgents: 1040,
+    cloudInfrastructure: 2190,
+  },
+  {
+    month: 'Apr',
+    desktopSoftware: 4050,
+    aiAgents: 1195,
+    cloudInfrastructure: 2380,
+  },
+  {
+    month: 'May',
+    desktopSoftware: 4175,
+    aiAgents: 1320,
+    cloudInfrastructure: 2532,
+  },
+  {
+    month: 'Jun',
+    desktopSoftware: 4250,
+    aiAgents: 1410,
+    cloudInfrastructure: 2532,
+  },
+];
+
+const utilizationHeatmapHours = ['00', '03', '06', '09', '12', '15', '18', '21'];
+
+const utilizationHeatmapRows = [
+  {
+    domain: 'Desktop',
+    signal: 'Adobe / JetBrains',
+    values: [8, 4, 12, 72, 88, 81, 46, 18],
+    decision: 'Floating licenses viable outside business hours',
+  },
+  {
+    domain: 'AI Agents',
+    signal: 'Copilot / Cursor',
+    values: [5, 3, 9, 63, 76, 71, 39, 22],
+    decision: 'Seat harvesting strongest for low night and weekend use',
+  },
+  {
+    domain: 'Cloud',
+    signal: 'EC2 / RDS / S3',
+    values: [18, 14, 21, 58, 69, 73, 44, 24],
+    decision: 'Schedule dev and QA workloads after peak windows',
+  },
+];
+
+const departmentCostAttribution = [
+  {
+    team: 'Engineering',
+    desktopCost: 1480,
+    cloudCost: 1240,
+    aiToolingCost: 760,
+    efficiency: 74,
+  },
+  {
+    team: 'Marketing',
+    desktopCost: 890,
+    cloudCost: 220,
+    aiToolingCost: 180,
+    efficiency: 69,
+  },
+  {
+    team: 'Product',
+    desktopCost: 620,
+    cloudCost: 310,
+    aiToolingCost: 245,
+    efficiency: 82,
+  },
+  {
+    team: 'QA',
+    desktopCost: 510,
+    cloudCost: 584,
+    aiToolingCost: 120,
+    efficiency: 66,
+  },
+  {
+    team: 'Finance',
+    desktopCost: 420,
+    cloudCost: 410,
+    aiToolingCost: 105,
+    efficiency: 79,
+  },
+];
+
 function formatRuntime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
@@ -699,7 +799,7 @@ function getModelLicenseBreakdown(extension) {
 }
 
 export default function App() {
-  const [activeView, setActiveView] = useState('dashboard');
+  const [activeView, setActiveView] = useState('unified-dashboard');
   const [config, setConfig] = useState(null);
   const [latestTelemetry, setLatestTelemetry] = useState(null);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
@@ -724,9 +824,15 @@ export default function App() {
   const [cloudRegionFilter, setCloudRegionFilter] = useState('All');
 
   const heroCopy = {
+    'unified-dashboard': {
+      eyebrow: 'Executive command center',
+      title: 'Unified Spend Optimization Dashboard',
+      description:
+        'One decision-making view that merges software licenses, AI tooling, and cloud assets into waste, savings, and efficiency signals.',
+    },
     dashboard: {
       eyebrow: 'License intelligence',
-      title: 'Software Utilization Command Center',
+      title: 'Software Licsence Management',
       description:
         'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
     },
@@ -1237,6 +1343,75 @@ export default function App() {
     };
   }, []);
 
+  const unifiedSummary = useMemo(() => {
+    const totalManagedSpend =
+      TOTAL_MONTHLY_SOFTWARE_SPEND + cloudSummary.monthlyBurn;
+    const combinedMonthlyWaste =
+      aggregates.totalWaste +
+      cloudSummary.zombieWaste +
+      cloudSummary.rightSizingSavings;
+    const optimizationScore =
+      totalManagedSpend > 0
+        ? Math.max(
+            0,
+            Math.round(((totalManagedSpend - combinedMonthlyWaste) / totalManagedSpend) * 100)
+          )
+        : 0;
+
+    return {
+      totalManagedSpend,
+      combinedMonthlyWaste,
+      optimizationScore,
+    };
+  }, [aggregates.totalWaste, cloudSummary]);
+
+  const topSavingsOpportunities = useMemo(
+    () =>
+      [
+        {
+          id: 'aws-rds-rightsize',
+          domain: 'Cloud',
+          action: 'Right-size AWS RDS (Production)',
+          impact: 450,
+          detail: 'Move prod-db-instance to the next lower committed tier',
+          tone: 'danger',
+        },
+        {
+          id: 'adobe-harvest',
+          domain: 'Software',
+          action: 'Harvest 12 idle Adobe licenses',
+          impact: 960,
+          detail: 'Recover design seats with less than 1 hour active runtime',
+          tone: 'danger',
+        },
+        {
+          id: 'copilot-downgrade',
+          domain: 'AI Tooling',
+          action: 'Downgrade 5 unused Copilot seats',
+          impact: 100,
+          detail: 'Move inactive users to request-based assignment',
+          tone: 'warning',
+        },
+        {
+          id: 'qa-schedule',
+          domain: 'Cloud',
+          action: 'Schedule QA cloud runners overnight',
+          impact: 186,
+          detail: 'Stop non-production compute outside test windows',
+          tone: 'warning',
+        },
+        {
+          id: 'jetbrains-harvest',
+          domain: 'Software',
+          action: 'Reassign underused JetBrains seats',
+          impact: 145,
+          detail: 'Shift named seats into a pooled developer allocation',
+          tone: 'success',
+        },
+      ].sort((firstItem, secondItem) => secondItem.impact - firstItem.impact),
+    []
+  );
+
   const requestSort = (key) => {
     setSortConfig((currentSort) => ({
       key,
@@ -1392,11 +1567,26 @@ export default function App() {
         </div>
         <div className="nav-actions">
           <button
-            className={activeView === 'dashboard' ? 'nav-link active' : 'nav-link'}
+            className={
+              activeView === 'unified-dashboard' ? 'nav-link active' : 'nav-link'
+            }
             type="button"
-            onClick={() => setActiveView('dashboard')}
+            onClick={() => {
+              setActiveView('unified-dashboard');
+              setShowAgentDetails(false);
+            }}
           >
             Dashboard
+          </button>
+          <button
+            className={activeView === 'dashboard' ? 'nav-link active' : 'nav-link'}
+            type="button"
+            onClick={() => {
+              setActiveView('dashboard');
+              setShowAgentDetails(false);
+            }}
+          >
+            Software Licsence Management
           </button>
           <button
             className={
@@ -1437,6 +1627,209 @@ export default function App() {
         </header>
 
         {error && <div className="error-message">{error}</div>}
+
+        {activeView === 'unified-dashboard' && (
+          <>
+          <section className="north-star-grid" aria-label="North star metrics">
+            <article className="north-star-card">
+              <span>Total Managed Spend</span>
+              <strong>{formatCurrency(unifiedSummary.totalManagedSpend)}</strong>
+              <small>Desktop licenses plus current cloud monthly burn</small>
+            </article>
+            <article className="north-star-card north-star-waste">
+              <span>Combined Monthly Waste</span>
+              <strong>{formatCurrency(unifiedSummary.combinedMonthlyWaste)}</strong>
+              <small>Idle licenses, orphaned cloud assets, and over-provisioned instances</small>
+            </article>
+            <article className="north-star-card optimization-card">
+              <span>Optimization Score</span>
+              <div className="optimization-gauge">
+                <strong>{unifiedSummary.optimizationScore}%</strong>
+                <i style={{ width: `${unifiedSummary.optimizationScore}%` }} />
+              </div>
+              <small>Distance from a zero-waste operating model</small>
+            </article>
+          </section>
+
+          <section className="panel compact-panel trends-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Cross-Domain Spend Trend</h2>
+                <p>Six-month cost movement across desktop software, AI agents, and cloud infrastructure.</p>
+              </div>
+            </div>
+            <div className="chart-frame unified-trend-frame">
+              <ResponsiveContainer width="100%" height={330}>
+                <AreaChart
+                  data={unifiedSpendTrend}
+                  margin={{ top: 16, right: 18, left: 0, bottom: 2 }}
+                >
+                  <defs>
+                    <linearGradient id="desktopSpendGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#39a7e8" stopOpacity={0.6} />
+                      <stop offset="100%" stopColor="#39a7e8" stopOpacity={0.12} />
+                    </linearGradient>
+                    <linearGradient id="aiSpendGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#8e44ad" stopOpacity={0.58} />
+                      <stop offset="100%" stopColor="#8e44ad" stopOpacity={0.12} />
+                    </linearGradient>
+                    <linearGradient id="cloudSpendGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#27ae60" stopOpacity={0.62} />
+                      <stop offset="100%" stopColor="#27ae60" stopOpacity={0.13} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    stroke="#edf2f7"
+                    strokeDasharray="3 3"
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="month"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: '#7b8ba0', fontSize: 12 }}
+                  />
+                  <YAxis
+                    tickFormatter={(value) => `$${formatNumber(value)}`}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: '#7b8ba0', fontSize: 12 }}
+                    width={58}
+                  />
+                  <Tooltip formatter={(value) => formatCurrency(value)} />
+                  <Legend content={<ChartLegend />} />
+                  <Area
+                    dataKey="desktopSoftware"
+                    name="Desktop Software"
+                    stackId="spend"
+                    type="monotone"
+                    stroke="#2980b9"
+                    strokeWidth={2.2}
+                    fill="url(#desktopSpendGradient)"
+                  />
+                  <Area
+                    dataKey="aiAgents"
+                    name="AI Agents"
+                    stackId="spend"
+                    type="monotone"
+                    stroke="#8e44ad"
+                    strokeWidth={2.2}
+                    fill="url(#aiSpendGradient)"
+                  />
+                  <Area
+                    dataKey="cloudInfrastructure"
+                    name="Cloud Infrastructure"
+                    stackId="spend"
+                    type="monotone"
+                    stroke="#27ae60"
+                    strokeWidth={2.2}
+                    fill="url(#cloudSpendGradient)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+
+          <section className="unified-grid">
+            <article className="panel compact-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Top 5 Savings Opportunities</h2>
+                  <p>Ranked actions across software, AI tooling, and cloud resources.</p>
+                </div>
+              </div>
+              <div className="savings-opportunity-list">
+                {topSavingsOpportunities.map((opportunity, index) => (
+                  <div className="savings-opportunity-item" key={opportunity.id}>
+                    <span className="opportunity-rank">{index + 1}</span>
+                    <div>
+                      <strong>{opportunity.action}</strong>
+                      <small>{opportunity.domain} - {opportunity.detail}</small>
+                    </div>
+                    <b>{formatCurrency(opportunity.impact)}/mo</b>
+                  </div>
+                ))}
+              </div>
+            </article>
+
+            <article className="panel compact-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Utilization Heatmap</h2>
+                  <p>Peak usage windows for license pooling and workload scheduling.</p>
+                </div>
+              </div>
+              <div className="heatmap-wrap">
+                <div className="heatmap-hours">
+                  <span />
+                  {utilizationHeatmapHours.map((hour) => (
+                    <b key={hour}>{hour}:00</b>
+                  ))}
+                </div>
+                {utilizationHeatmapRows.map((row) => (
+                  <div className="heatmap-row" key={row.domain}>
+                    <div className="heatmap-label">
+                      <strong>{row.domain}</strong>
+                      <small>{row.signal}</small>
+                    </div>
+                    {row.values.map((value, index) => (
+                      <span
+                        className="heatmap-cell"
+                        key={`${row.domain}-${utilizationHeatmapHours[index]}`}
+                        style={{ '--intensity': value / 100 }}
+                        title={`${value}% utilization`}
+                      >
+                        {value}
+                      </span>
+                    ))}
+                    <small className="heatmap-decision">{row.decision}</small>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Departmental Cost Attribution</h2>
+                <p>Team-level accountability across desktop, cloud, and AI tooling costs.</p>
+              </div>
+            </div>
+            <div className="table-wrap attribution-table-wrap">
+              <table className="department-cost-table">
+                <thead>
+                  <tr>
+                    <th>Team</th>
+                    <th>Desktop Cost</th>
+                    <th>Cloud Cost</th>
+                    <th>AI Tooling Cost</th>
+                    <th>Efficiency %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {departmentCostAttribution.map((team) => (
+                    <tr key={team.team}>
+                      <td>
+                        <strong>{team.team}</strong>
+                      </td>
+                      <td>{formatCurrency(team.desktopCost)}</td>
+                      <td>{formatCurrency(team.cloudCost)}</td>
+                      <td>{formatCurrency(team.aiToolingCost)}</td>
+                      <td>
+                        <div className="efficiency-cell">
+                          <span>{team.efficiency}%</span>
+                          <i style={{ width: `${team.efficiency}%` }} />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          </>
+        )}
 
         {activeView === 'dashboard' && (
           <>
