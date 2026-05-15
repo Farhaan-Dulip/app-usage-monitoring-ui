@@ -798,6 +798,74 @@ function getModelLicenseBreakdown(extension) {
   );
 }
 
+function NavIcon({ type }) {
+  const icons = {
+    brand: (
+      <>
+        <path d="M5.5 7.5h5A2.5 2.5 0 0 1 13 10v1.5A2.5 2.5 0 0 1 10.5 14h-5A2.5 2.5 0 0 1 3 11.5V10a2.5 2.5 0 0 1 2.5-2.5Z" />
+        <path d="M8 7.5V4" />
+        <path d="M6.25 11h.01" />
+        <path d="M9.75 11h.01" />
+        <path d="M6.5 14v1" />
+        <path d="M9.5 14v1" />
+      </>
+    ),
+    dashboard: (
+      <>
+        <path d="M3 8a5 5 0 0 1 10 0" />
+        <path d="M4.5 12.5h7" />
+        <path d="m8 8 2.6-2.6" />
+        <path d="M8 8h.01" />
+      </>
+    ),
+    software: (
+      <>
+        <path d="M3 4.5h10v7H3z" />
+        <path d="M5 14h6" />
+        <path d="M8 11.5V14" />
+        <path d="M5 7h2" />
+        <path d="M5 9h4" />
+      </>
+    ),
+    agent: (
+      <>
+        <path d="M5 5.5h6v5H5z" />
+        <path d="M8 5.5V3.5" />
+        <path d="M4 8H2.5" />
+        <path d="M13.5 8H12" />
+        <path d="M6.5 8h.01" />
+        <path d="M9.5 8h.01" />
+        <path d="M6 12.5h4" />
+      </>
+    ),
+    cloud: (
+      <>
+        <path d="M5.5 12.5H11a3 3 0 0 0 .45-5.97A4.25 4.25 0 0 0 3.28 8.1 2.35 2.35 0 0 0 5.5 12.5Z" />
+        <path d="M6 15h4" />
+      </>
+    ),
+  };
+
+  return (
+    <svg
+      aria-hidden="true"
+      className="nav-icon"
+      fill="none"
+      focusable="false"
+      viewBox="0 0 16 16"
+    >
+      <g
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      >
+        {icons[type]}
+      </g>
+    </svg>
+  );
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState('unified-dashboard');
   const [config, setConfig] = useState(null);
@@ -815,6 +883,7 @@ export default function App() {
   });
   const [selectedDeviceId, setSelectedDeviceId] = useState('laptop-dx01');
   const [showAgentDetails, setShowAgentDetails] = useState(false);
+  const [isNavCollapsedAfterSelect, setIsNavCollapsedAfterSelect] = useState(false);
   const [historicalRange, setHistoricalRange] = useState(30);
   const [sortConfig, setSortConfig] = useState({
     key: 'savingsOpportunity',
@@ -1546,6 +1615,13 @@ export default function App() {
     setLatestTelemetry(null);
   };
 
+  const handleNavSelection = (event, nextView) => {
+    setActiveView(nextView);
+    setShowAgentDetails(false);
+    setIsNavCollapsedAfterSelect(true);
+    event.currentTarget.blur();
+  };
+
   useEffect(() => {
     loadConfig();
     loadTelemetry();
@@ -1560,9 +1636,19 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <nav className="top-nav" aria-label="Primary navigation">
+      <nav
+        className={
+          isNavCollapsedAfterSelect
+            ? 'top-nav nav-collapsed-after-select'
+            : 'top-nav'
+        }
+        aria-label="Primary navigation"
+        onMouseLeave={() => setIsNavCollapsedAfterSelect(false)}
+      >
         <div className="brand-mark">
-          <span className="brand-icon">A</span>
+          <span className="brand-icon">
+            <NavIcon type="brand" />
+          </span>
           <span>AgentOps</span>
         </div>
         <div className="nav-actions">
@@ -1571,34 +1657,34 @@ export default function App() {
               activeView === 'unified-dashboard' ? 'nav-link active' : 'nav-link'
             }
             type="button"
-            onClick={() => {
-              setActiveView('unified-dashboard');
-              setShowAgentDetails(false);
-            }}
+            onClick={(event) => handleNavSelection(event, 'unified-dashboard')}
           >
-            Dashboard
+            <span className="nav-glyph">
+              <NavIcon type="dashboard" />
+            </span>
+            <span className="nav-label">Dashboard</span>
           </button>
           <button
             className={activeView === 'dashboard' ? 'nav-link active' : 'nav-link'}
             type="button"
-            onClick={() => {
-              setActiveView('dashboard');
-              setShowAgentDetails(false);
-            }}
+            onClick={(event) => handleNavSelection(event, 'dashboard')}
           >
-            Software Licsence Management
+            <span className="nav-glyph">
+              <NavIcon type="software" />
+            </span>
+            <span className="nav-label">Software Licsence Management</span>
           </button>
           <button
             className={
               activeView === 'agent-management' ? 'nav-link active' : 'nav-link'
             }
             type="button"
-            onClick={() => {
-              setActiveView('agent-management');
-              setShowAgentDetails(false);
-            }}
+            onClick={(event) => handleNavSelection(event, 'agent-management')}
           >
-            Agent Management
+            <span className="nav-glyph">
+              <NavIcon type="agent" />
+            </span>
+            <span className="nav-label">Agent Management</span>
           </button>
           <button
             className={
@@ -1607,12 +1693,14 @@ export default function App() {
                 : 'nav-link'
             }
             type="button"
-            onClick={() => {
-              setActiveView('cloud-asset-management');
-              setShowAgentDetails(false);
-            }}
+            onClick={(event) =>
+              handleNavSelection(event, 'cloud-asset-management')
+            }
           >
-            Cloud Asset Management
+            <span className="nav-glyph">
+              <NavIcon type="cloud" />
+            </span>
+            <span className="nav-label">Cloud Asset Management</span>
           </button>
         </div>
       </nav>
@@ -2759,7 +2847,7 @@ export default function App() {
             </form>
           </section>
 
-          <section className="panel">
+          <section className="panel fleet-management-panel">
             <div className="panel-header">
               <div>
                 <h2>Fleet Management View</h2>
