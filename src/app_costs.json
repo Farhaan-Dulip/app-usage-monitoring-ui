@@ -1,0 +1,70 @@
+{
+    "timestamp": 1779036172.415037,
+    "apps": [
+        {
+            "name": "Notepad.exe",
+            "license_cost": 10.0
+        },
+        {
+            "name": "Postman.exe",
+            "license_cost": 20.0
+        },
+        {
+            "name": "chrome.exe",
+            "license_cost": 10.0
+        },
+        {
+            "name": "msedge.exe",
+            "license_cost": 50.0
+        },
+        {
+            "name": "idea64.exe",
+            "license_cost": 60.0
+        },
+        {
+            "name": "code.exe",
+            "license_cost": 40.0
+        },
+        {
+            "name": "cursor.exe",
+            "license_cost": 10.0
+        }
+    ],
+    "extensions": [
+        {
+            "name": "github-copilot",
+            "parent_app": "idea64.exe",
+            "subscriptionType": "GitHub Copilot Business",
+            "license_cost": 20.0
+        },
+        {
+            "name": "tabnine",
+            "parent_app": "idea64.exe",
+            "subscriptionType": "Tabnine Enterprise",
+            "license_cost": 20.0
+        },
+        {
+            "name": "github-copilot",
+            "parent_app": "code.exe",
+            "subscriptionType": "GitHub Copilot Business",
+            "license_cost": 20.0
+        },
+        {
+            "name": "codex",
+            "parent_app": "code.exe",
+            "license_cost": 10.0
+        },
+        {
+            "name": "github-copilot",
+            "parent_app": "cursor.exe",
+            "subscriptionType": "GitHub Copilot Business",
+            "license_cost": 25.0
+        },
+        {
+            "name": "codex",
+            "parent_app": "cursor.exe",
+            "subscriptionType": "ChatGPT Pro",
+            "license_cost": 25.0
+        }
+    ]
+}

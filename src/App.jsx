@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import appCostData from './app_costs.json';
+import appConfig from './app_config.json';
 import {
   Area,
   AreaChart,
@@ -19,6 +21,15 @@ import {
 
 const RECLAIMABLE_THRESHOLD_SECONDS = 60 * 60;
 const TOTAL_MONTHLY_SOFTWARE_SPEND = 4250;
+const DEFAULT_USAGE_WINDOW_SECONDS = 60 * 60;
+const DEFAULT_RECLAIM_POLICY = {
+  evaluation_window_seconds: 30 * 24 * 60 * 60,
+  worked_threshold_seconds: RECLAIMABLE_THRESHOLD_SECONDS,
+  minimum_observation_seconds: 7 * 24 * 60 * 60,
+  token_threshold: 0,
+};
+
+const sentEmailSummaryWindowKeys = new Set();
 
 const pricingMap = {
   Adobe: 150,
@@ -72,6 +83,16 @@ const aiModelSubscriptionMap = {
   'gemini-1.5-pro': 'Google AI paid tier',
   'gemini-2.5-pro': 'Google AI paid tier',
 };
+
+const engagementChartColors = [
+  '#e74c3c',
+  '#8e44ad',
+  '#2980b9',
+  '#16a085',
+  '#f39c12',
+  '#2c3e50',
+  '#d35400',
+];
 
 const appDisplayNames = {
   'code.exe': 'Visual Studio Code',
@@ -470,10 +491,475 @@ const departmentCostAttribution = [
   },
 ];
 
+const reportTemplates = [
+  {
+    id: 'ceo-monthly',
+    name: 'CEO Monthly',
+    audience: 'Executive Summary',
+    description:
+      'High-level financial gains, managed spend, waste reduction, and savings progress for leadership.',
+    owner: 'Executive Office',
+    cadence: 'Monthly',
+    format: 'PDF',
+    accent: 'report-accent-blue',
+    includedSections: ['Financial gains', 'Waste reduction', 'Optimization score'],
+  },
+  {
+    id: 'it-audit',
+    name: 'IT Audit',
+    audience: 'Compliance',
+    description:
+      'Detailed inventory of software installations compared with active usage and reclaimable seats.',
+    owner: 'IT Operations',
+    cadence: 'Weekly',
+    format: 'Excel',
+    accent: 'report-accent-red',
+    includedSections: ['Installations', 'Usage evidence', 'License status'],
+  },
+  {
+    id: 'cloud-finops',
+    name: 'Cloud FinOps',
+    audience: 'Infrastructure',
+    description:
+      'Cloud right-sizing, provider spend, zombie resources, and cleanup opportunities by account.',
+    owner: 'Platform Engineering',
+    cadence: 'Weekly',
+    format: 'PDF + CSV',
+    accent: 'report-accent-green',
+    includedSections: ['Right-sizing', 'Orphaned assets', 'Provider spend'],
+  },
+  {
+    id: 'ai-adoption',
+    name: 'AI Adoption',
+    audience: 'Engineering',
+    description:
+      'Copilot, Cursor, and AI extension utilization with model adoption and developer efficiency signals.',
+    owner: 'Engineering Enablement',
+    cadence: 'Monthly',
+    format: 'JSON',
+    accent: 'report-accent-purple',
+    includedSections: ['AI seats', 'Selected models', 'Developer efficiency'],
+  },
+];
+
+const reportDimensions = ['User', 'Department', 'App', 'Cloud Provider'];
+const reportMetrics = ['Cost', 'Active Time', 'Waste', 'CPU %'];
+
+const reportHistory = [
+  {
+    id: 'rpt-1048',
+    name: 'CEO Monthly - April Close',
+    type: 'Executive Summary',
+    generatedAt: 'May 01, 2026 09:00',
+    version: 'v4',
+    format: 'PDF',
+    owner: 'Finance Ops',
+  },
+  {
+    id: 'rpt-1042',
+    name: 'IT Audit - License Evidence',
+    type: 'Compliance',
+    generatedAt: 'Apr 28, 2026 16:20',
+    version: 'v2',
+    format: 'XLSX',
+    owner: 'IT Operations',
+  },
+  {
+    id: 'rpt-1039',
+    name: 'Cloud FinOps - Orphan Cleanup',
+    type: 'Infrastructure',
+    generatedAt: 'Apr 25, 2026 11:45',
+    version: 'v3',
+    format: 'CSV',
+    owner: 'Platform Engineering',
+  },
+  {
+    id: 'rpt-1031',
+    name: 'AI Adoption - Engineering Rollout',
+    type: 'Engineering',
+    generatedAt: 'Apr 18, 2026 14:10',
+    version: 'v1',
+    format: 'JSON',
+    owner: 'Engineering Enablement',
+  },
+];
+
 function formatRuntime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+}
+
+function getTimestampMs(value) {
+  if (!value) return null;
+  if (typeof value === 'number') {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+
+  const parsedTime = new Date(value).getTime();
+  return Number.isNaN(parsedTime) ? null : parsedTime;
+}
+
+function getTelemetryTimestampMs(payload) {
+  return getTimestampMs(payload?.timestamp);
+}
+
+function getTelemetryEvaluationWindowMs(payload) {
+  const firstUsageRow = payload?.usage?.[0] || {};
+  const startsAt = getTimestampMs(
+    payload?.evaluation_window_start_time ||
+      payload?.last_reset_time ||
+      payload?.evaluation_window?.starts_at ||
+      firstUsageRow.evaluation_window_start_time ||
+      firstUsageRow.last_reset_time ||
+      firstUsageRow.evaluation_window?.starts_at
+  );
+  const endsAt = getTimestampMs(
+    payload?.evaluation_window_end_time ||
+      payload?.evaluation_window?.ends_at ||
+      firstUsageRow.evaluation_window_end_time ||
+      firstUsageRow.evaluation_window?.ends_at
+  );
+
+  if (startsAt === null || endsAt === null || endsAt <= startsAt) {
+    return null;
+  }
+
+  return { startsAt, endsAt };
+}
+
+function getTelemetryLastResetMs(payload) {
+  const firstUsageRow = payload?.usage?.[0] || {};
+  return getTimestampMs(
+    payload?.last_reset_time ||
+      payload?.evaluation_window_start_time ||
+      payload?.evaluation_window?.starts_at ||
+      firstUsageRow.last_reset_time ||
+      firstUsageRow.evaluation_window_start_time ||
+      firstUsageRow.evaluation_window?.starts_at
+  );
+}
+
+function getTelemetryLastResetForAppMs(payload, appName) {
+  const usageEntry = (payload?.usage || []).find(
+    (entry) => entry.app_name === appName
+  );
+
+  if (!usageEntry) return null;
+  return getTimestampMs(
+    usageEntry.last_reset_time ||
+      usageEntry.evaluation_window_start_time ||
+      usageEntry.evaluation_window?.starts_at
+  );
+}
+
+function getConfigEvaluationWindowSeconds(config) {
+  const appPolicyWindows = Object.values(config?.licensed_app_policies || {})
+    .map((policy) => policy?.evaluation_window_seconds)
+    .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+    .map(Number);
+  const extensionPolicyWindows = (config?.extensions || [])
+    .map((extension) => extension?.reclaim_policy?.evaluation_window_seconds)
+    .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+    .map(Number);
+  const policyWindows = [...appPolicyWindows, ...extensionPolicyWindows];
+
+  return policyWindows.length > 0
+    ? Math.min(...policyWindows)
+    : DEFAULT_RECLAIM_POLICY.evaluation_window_seconds;
+}
+
+function getCurrentEvaluationWindow(windowStartsAt, windowEndsAt) {
+  const nowMs = Date.now();
+  if (!windowStartsAt || !windowEndsAt || nowMs < windowEndsAt) {
+    return { startsAt: windowStartsAt, endsAt: windowEndsAt };
+  }
+
+  const windowDurationMs = Math.max(1, windowEndsAt - windowStartsAt);
+  const elapsedWindows = Math.floor((nowMs - windowEndsAt) / windowDurationMs) + 1;
+  const startsAt = windowEndsAt + (elapsedWindows - 1) * windowDurationMs;
+
+  return {
+    startsAt,
+    endsAt: startsAt + windowDurationMs,
+  };
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Not started';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
+function formatLastSeenDateTime(value) {
+  if (!value) return '-';
+  return formatDateTime(value);
+}
+
+function formatLastTrackedInline(value) {
+  return value
+    ? formatDateTime(value)
+    : '- Not being used';
+}
+
+function createUsageCounters() {
+  return {
+    trackedRuntimeSeconds: 0,
+    foregroundRuntimeSeconds: 0,
+    workedRuntimeSeconds: 0,
+    automationWorkedSeconds: 0,
+    backgroundAutomationWorkedSeconds: 0,
+    idleRuntimeSeconds: 0,
+    consumedTokens: 0,
+    selectedAiModel: null,
+    tokenSource: null,
+  };
+}
+
+function readUsageCounters(entry = {}) {
+  const foregroundRuntimeSeconds =
+    entry.foreground_runtime_seconds ?? entry.total_runtime_seconds ?? 0;
+  const backgroundAutomationWorkedSeconds =
+    entry.background_automation_worked_seconds ?? 0;
+  const trackedRuntimeSeconds =
+    entry.tracked_runtime_seconds ??
+    entry.total_runtime_seconds ??
+    foregroundRuntimeSeconds + backgroundAutomationWorkedSeconds;
+  const idleRuntimeSeconds = entry.idle_runtime_seconds ?? 0;
+  const automationWorkedSeconds = entry.automation_worked_seconds ?? 0;
+  const workedRuntimeSeconds =
+    entry.worked_runtime_seconds ??
+    Math.max(0, foregroundRuntimeSeconds - idleRuntimeSeconds);
+  const consumedTokens = Number(
+    entry.consumed_tokens ?? entry.consumedTokens ?? 0
+  );
+  const selectedAiModel =
+    entry.selected_ai_model || entry.selectedAiModel || entry.ai_model || null;
+  const tokenSource = entry.token_source || entry.tokenSource || null;
+
+  return {
+    trackedRuntimeSeconds,
+    foregroundRuntimeSeconds,
+    workedRuntimeSeconds,
+    automationWorkedSeconds,
+    backgroundAutomationWorkedSeconds,
+    idleRuntimeSeconds,
+    consumedTokens: Number.isFinite(consumedTokens) ? consumedTokens : 0,
+    selectedAiModel,
+    tokenSource,
+  };
+}
+
+function getUsageCounters(usageMap, appName) {
+  return usageMap.get(appName) || createUsageCounters();
+}
+
+function getUsageCountersForWindow(history, appName, windowEndsAt, windowSeconds) {
+  const counters = createUsageCounters();
+  const windowStartsAt = windowEndsAt - windowSeconds * 1000;
+
+  history.forEach((payload) => {
+    const timestampMs = getTelemetryTimestampMs(payload);
+    if (timestampMs === null || timestampMs < windowStartsAt) return;
+
+    (payload.usage || []).forEach((entry) => {
+      if (entry.app_name !== appName) return;
+
+      const next = readUsageCounters(entry);
+      counters.trackedRuntimeSeconds += next.trackedRuntimeSeconds;
+      counters.foregroundRuntimeSeconds += next.foregroundRuntimeSeconds;
+      counters.workedRuntimeSeconds += next.workedRuntimeSeconds;
+      counters.automationWorkedSeconds += next.automationWorkedSeconds;
+      counters.backgroundAutomationWorkedSeconds +=
+        next.backgroundAutomationWorkedSeconds;
+      counters.idleRuntimeSeconds += next.idleRuntimeSeconds;
+    });
+  });
+
+  return counters;
+}
+
+function getUtilizationPercent(workedRuntimeSeconds, foregroundRuntimeSeconds) {
+  if (foregroundRuntimeSeconds <= 0) return 0;
+  return Math.round((workedRuntimeSeconds / foregroundRuntimeSeconds) * 100);
+}
+
+function getPolicyUtilizationPercent(workedRuntimeSeconds, policy) {
+  const evaluationWindowSeconds = getPolicyValue(policy, 'evaluation_window_seconds');
+  if (evaluationWindowSeconds <= 0) return 0;
+  return Math.min(
+    100,
+    Math.round((workedRuntimeSeconds / evaluationWindowSeconds) * 100)
+  );
+}
+
+function getManualWorkedSeconds(entry) {
+  return Math.max(
+    0,
+    (entry.workedRuntimeSeconds || 0) - (entry.automationWorkedSeconds || 0)
+  );
+}
+
+function getPolicyValue(policy, key) {
+  return policy?.[key] ?? DEFAULT_RECLAIM_POLICY[key];
+}
+
+function getFirstSeenTimestampMs(value) {
+  if (!value) return null;
+  if (typeof value === 'number') {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+
+  const parsedTime = new Date(value).getTime();
+  return Number.isNaN(parsedTime) ? null : parsedTime;
+}
+
+function getAppPolicy(config, appName) {
+  const normalizedName = String(appName || '').toLowerCase();
+  return config?.licensed_app_policies?.[normalizedName] || DEFAULT_RECLAIM_POLICY;
+}
+
+function getAppFirstSeenAt(config, appName) {
+  const normalizedName = String(appName || '').toLowerCase();
+  return config?.licensed_app_metadata?.[normalizedName]?.first_seen_at || null;
+}
+
+function getAppLastSeenAt(config, appName) {
+  const normalizedName = String(appName || '').toLowerCase();
+  const metadata = config?.licensed_app_metadata?.[normalizedName];
+  return metadata?.last_seen_at || metadata?.lastSeenAt || null;
+}
+
+function getLatestUsageTimestampForApp(history, appName) {
+  return history.reduce((latestTimestampMs, payload) => {
+    const usageEntry = (payload.usage || []).find(
+      (entry) => entry.app_name === appName
+    );
+    if (!usageEntry) return latestTimestampMs;
+
+    const timestampMs =
+      getTimestampMs(
+        usageEntry.last_reset_time ||
+          usageEntry.evaluation_window_start_time ||
+          usageEntry.evaluation_window?.starts_at
+      ) ?? getTelemetryTimestampMs(payload);
+    if (timestampMs === null) return latestTimestampMs;
+
+    return Math.max(latestTimestampMs, timestampMs);
+  }, 0);
+}
+
+function getLastSeenAt(config, history, appName, fallbackLastSeenAt = null) {
+  const configuredLastSeenAt =
+    fallbackLastSeenAt || getAppLastSeenAt(config, appName);
+  const configuredLastSeenMs = getFirstSeenTimestampMs(configuredLastSeenAt);
+  const telemetryLastSeenMs = getLatestUsageTimestampForApp(history, appName);
+  const lastSeenMs = Math.max(configuredLastSeenMs || 0, telemetryLastSeenMs);
+
+  if (lastSeenMs <= 0) return null;
+  return new Date(lastSeenMs).toISOString();
+}
+
+function getAgentStartedAt(config) {
+  return config?.agent_started_at || config?.agentStartedAt || null;
+}
+
+function getAgentStartedTimestampMs(payload) {
+  return getFirstSeenTimestampMs(
+    payload?.agent_started_at || payload?.agentStartedAt
+  );
+}
+
+function getObservationStartedAt(config, firstSeenAt) {
+  const firstSeenMs = getFirstSeenTimestampMs(firstSeenAt);
+  const agentStartedMs = getFirstSeenTimestampMs(getAgentStartedAt(config));
+  const observationStartedMs = Math.max(firstSeenMs || 0, agentStartedMs || 0);
+
+  if (observationStartedMs <= 0) return null;
+  return new Date(observationStartedMs).toISOString();
+}
+
+function getAppType(config, appName) {
+  const normalizedName = String(appName || '').toLowerCase();
+  return config?.licensed_app_types?.[normalizedName] || 'application';
+}
+
+function appHasAgentExtension(config, appName) {
+  const normalizedName = String(appName || '').toLowerCase();
+  return (config?.extensions || []).some(
+    (extension) =>
+      String(extension?.parent_app || '').toLowerCase() === normalizedName &&
+      extension?.type === 'agent'
+  );
+}
+
+function getReclaimDecision({
+  policy,
+  firstSeenAt,
+  observationStartedAt,
+  workedRuntimeSeconds,
+  consumedTokens = 0,
+  nowMs = Date.now(),
+}) {
+  const firstSeenMs = getFirstSeenTimestampMs(firstSeenAt);
+  const observationStartedMs =
+    getFirstSeenTimestampMs(observationStartedAt) || firstSeenMs;
+  const minimumObservationSeconds = getPolicyValue(
+    policy,
+    'minimum_observation_seconds'
+  );
+  const requiredObservationSeconds = minimumObservationSeconds;
+  const workedThresholdSeconds = getPolicyValue(policy, 'worked_threshold_seconds');
+  const tokenThreshold = getPolicyValue(policy, 'token_threshold');
+
+  if (!firstSeenMs && !observationStartedMs) {
+    return {
+      status: 'Insufficient Data',
+      savingsEligible: false,
+      reason: 'Waiting for first-seen evidence',
+    };
+  }
+
+  const observedSeconds = Math.max(
+    0,
+    Math.floor((nowMs - observationStartedMs) / 1000)
+  );
+  if (observedSeconds < requiredObservationSeconds) {
+    const remainingSeconds = requiredObservationSeconds - observedSeconds;
+    return {
+      status: 'Observing',
+      savingsEligible: false,
+      reason: `${formatRuntime(remainingSeconds)} until policy decision`,
+    };
+  }
+
+  const hasEnoughWorkedRuntime = workedRuntimeSeconds >= workedThresholdSeconds;
+  const hasEnoughTokens = tokenThreshold <= 0 || consumedTokens >= tokenThreshold;
+
+  if (hasEnoughWorkedRuntime && hasEnoughTokens) {
+    return {
+      status: 'Active',
+      savingsEligible: false,
+      reason: 'Policy thresholds met',
+    };
+  }
+
+  return {
+    status: 'Reclaimable',
+    savingsEligible: true,
+    reason: 'Below policy thresholds',
+  };
+}
+
+function getStatusBadgeClass(status) {
+  if (status === 'Active' || status === 'Detected') return 'status-active';
+  if (status === 'Observing') return 'status-observing';
+  if (status === 'Reclaimable') return 'status-reclaimable';
+  return 'status-neutral';
 }
 
 function formatCurrency(value) {
@@ -494,6 +980,250 @@ function formatNumber(value) {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function createEmailSummarySubject(windowEndsAt) {
+  return `AgentOps evaluation summary - ${formatDateTime(windowEndsAt)}`;
+}
+
+function createEmailSummaryHtml({
+  evaluationWindow,
+  aggregates,
+  unifiedSummary,
+  topSavingsOpportunities,
+  usageByApp,
+  usageByExtension,
+}) {
+  const topApps = (usageByApp || [])
+    .filter((entry) => entry.savingsOpportunity > 0)
+    .sort((first, second) => second.savingsOpportunity - first.savingsOpportunity)
+    .slice(0, 5);
+
+  const topExtensions = (usageByExtension || [])
+    .filter((entry) => entry.status === 'Reclaimable')
+    .sort((first, second) => second.monthlyCost - first.monthlyCost)
+    .slice(0, 3);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Software License Management Summary</title>
+</head>
+<body style="margin:0;padding:0;font-family:Inter,system-ui,sans-serif;background:#eef2f7;color:#0f172a;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 30px 80px rgba(15,23,42,0.12);">
+          <tr>
+            <td style="padding:32px 32px 24px; background:linear-gradient(135deg,#2563eb,#9333ea);color:#ffffff;">
+              <h1 style="margin:0;font-size:24px;letter-spacing:-0.02em;">Software License Management Summary</h1>
+              <p style="margin:12px 0 0;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.82);">Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} — ${formatDateTime(evaluationWindow.endsAt)}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 32px 0;">
+              <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+                <tr>
+                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Managed spend</p>
+                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(unifiedSummary.totalManagedSpend)}</h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Desktop, AI, and cloud spend under review.</p>
+                    </div>
+                  </td>
+                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Identified waste</p>
+                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(unifiedSummary.combinedMonthlyWaste)}</h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Idle assets and reclaimable license costs.</p>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Software spend</p>
+                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(aggregates.trackedMonthlyCost)}</h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Total tracked app license cost.</p>
+                    </div>
+                  </td>
+                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Software savings</p>
+                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(aggregates.totalSavings)}</h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Potential monthly savings opportunity.</p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
+                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Software License Management highlights</h3>
+                <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Active app licenses</td>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.activeSeats}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Total app licenses</td>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.totalSeats}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Reclaimable licenses</td>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.reclaimableSeats}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0;">License efficiency score</td>
+                    <td style="padding:12px 0;text-align:right;">${aggregates.licenseEfficiencyScore}%</td>
+                  </tr>
+                </table>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
+                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">AI license summary</h3>
+                <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">AI agent licenses</td>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.totalAgentExtensions}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Active AI licenses</td>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.activeExtensions}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">AI monthly cost</td>
+                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${formatCurrency(aggregates.totalExtensionMonthlyCost)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0;">Reclaimable AI savings</td>
+                    <td style="padding:12px 0;text-align:right;">${formatCurrency(aggregates.totalExtensionSavings)}</td>
+                  </tr>
+                </table>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Top savings opportunities</h3>
+              <ul style="margin:0;padding:0 0 0 18px;color:#475569;font-size:13px;line-height:1.65;">
+                ${topSavingsOpportunities
+                  .slice(0, 3)
+                  .map(
+                    (item) =>
+                      `<li style="margin-bottom:8px;"><strong>${item.action}</strong> — ${item.detail} (${formatCurrency(item.impact)}/mo)</li>`
+                  )
+                  .join('')}
+              </ul>
+            </td>
+          </tr>
+          ${topApps.length > 0 ? `
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
+                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Top reclaimable software licenses</h3>
+                <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
+                  <tr style="background:#eef2ff;">
+                    <th align="left" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;">App</th>
+                    <th align="right" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;">Cost</th>
+                    <th align="right" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;">Savings</th>
+                  </tr>
+                  ${topApps
+                    .map(
+                      (entry) =>
+                        `<tr>
+                          <td style="padding:10px 10px 10px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;">${entry.displayName}</td>
+                          <td align="right" style="padding:10px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;">${formatCurrency(entry.monthlyCost)}</td>
+                          <td align="right" style="padding:10px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;">${formatCurrency(entry.savingsOpportunity)}</td>
+                        </tr>`
+                    )
+                    .join('')}
+                </table>
+              </div>
+            </td>
+          </tr>` : ''}
+          ${topExtensions.length > 0 ? `
+          <tr>
+            <td style="padding:0 32px 32px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
+                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Top reclaimable AI licenses</h3>
+                <ul style="margin:0;padding:0 0 0 18px;color:#475569;font-size:13px;line-height:1.65;">
+                  ${topExtensions
+                    .map(
+                      (extension) =>
+                        `<li style="margin-bottom:10px;"><strong>${extension.name}</strong> — ${formatCurrency(extension.monthlyCost)} /mo, ${extension.detectedSeatCount} seats</li>`
+                    )
+                    .join('')}
+                </ul>
+              </div>
+            </td>
+          </tr>` : ''}
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+function createEmailSummaryBody({
+  evaluationWindow,
+  aggregates,
+  cloudSummary,
+  unifiedSummary,
+  topSavingsOpportunities,
+  usageByApp,
+  usageByExtension,
+}) {
+  const baseLines = [
+    `Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} - ${formatDateTime(
+      evaluationWindow.endsAt
+    )}`,
+    '',
+    `Total managed spend: ${formatCurrency(unifiedSummary.totalManagedSpend)}`,
+    `Combined monthly waste: ${formatCurrency(unifiedSummary.combinedMonthlyWaste)}`,
+    `Optimization score: ${unifiedSummary.optimizationScore}%`,
+    '',
+    `Tracked monthly software spend: ${formatCurrency(aggregates.trackedMonthlyCost)}`,
+    `Identified software savings: ${formatCurrency(aggregates.totalSavings)}`,
+    `Active app licenses: ${aggregates.activeSeats}/${aggregates.totalSeats}`,
+    `Reclaimable licenses: ${aggregates.reclaimableSeats}`,
+    '',
+    `AI agent licenses: ${aggregates.totalAgentExtensions}`,
+    `Active AI licenses: ${aggregates.activeExtensions}`,
+    `AI monthly cost: ${formatCurrency(aggregates.totalExtensionMonthlyCost)}`,
+    `Reclaimable AI savings: ${formatCurrency(aggregates.totalExtensionSavings)}`,
+    '',
+    `Cloud monthly burn: ${formatCurrency(cloudSummary.monthlyBurn)}`,
+    `Zombie waste: ${formatCurrency(cloudSummary.zombieWaste)}`,
+    `Right-sizing savings potential: ${formatCurrency(cloudSummary.rightSizingSavings)}`,
+    '',
+    'Top savings opportunities:',
+  ];
+
+  const opportunityLines = topSavingsOpportunities.slice(0, 3).map(
+    (item, index) =>
+      `${index + 1}. ${item.action} — ${item.detail} (${formatCurrency(item.impact)}/mo)`
+  );
+
+  const textBody = [...baseLines, ...opportunityLines, '', 'Delivered by AgentOps UI'].join('\n');
+  const htmlBody = createEmailSummaryHtml({
+    evaluationWindow,
+    aggregates,
+    unifiedSummary,
+    topSavingsOpportunities,
+    usageByApp,
+    usageByExtension,
+  });
+
+  return { text: textBody, html: htmlBody };
 }
 
 function getUtilizationStatus(cpuUtilization, memoryUtilization) {
@@ -583,8 +1313,167 @@ function ChartLegend({ payload }) {
   );
 }
 
-function getMonthlyCost(appName, index) {
-  const normalizedName = appName.toLowerCase();
+function normalizeCostLookupName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getCostAliasKeys(name) {
+  const normalizedName = normalizeCostLookupName(name);
+  if (!normalizedName) return [];
+
+  const withoutExtension = normalizedName.replace(/\.[^/.]+$/, '');
+  const displayName = appDisplayNames[normalizedName];
+  const aliases = [normalizedName, withoutExtension];
+
+  if (displayName) {
+    aliases.push(normalizeCostLookupName(displayName));
+  }
+
+  return Array.from(new Set(aliases.filter(Boolean)));
+}
+
+function setCatalogCost(costMap, key, cost) {
+  const numericCost = Number(cost);
+  if (!key || !Number.isFinite(numericCost)) return;
+
+  const existingCost = costMap.get(key);
+  costMap.set(
+    key,
+    Number.isFinite(existingCost) ? Math.max(existingCost, numericCost) : numericCost
+  );
+}
+
+function setCatalogCostAliases(costMap, name, cost) {
+  getCostAliasKeys(name).forEach((alias) => setCatalogCost(costMap, alias, cost));
+}
+
+function setCatalogValue(valueMap, key, value) {
+  if (!key || !value) return;
+  valueMap.set(key, value);
+}
+
+function createAppCostCatalog(payload = {}) {
+  const appCosts = new Map();
+  const extensionCosts = new Map();
+  const extensionParentCosts = new Map();
+  const extensionSubscriptionTypes = new Map();
+  const extensionParentSubscriptionTypes = new Map();
+
+  (payload.apps || []).forEach((entry) => {
+    const cost = readCostValue(entry);
+    setCatalogCostAliases(appCosts, entry?.name || entry?.app_name, cost);
+  });
+
+  (payload.extensions || []).forEach((entry) => {
+    const extensionName = entry?.name || entry?.extension_name;
+    const parentApp = entry?.parent_app || entry?.parentApp;
+    const cost = readCostValue(entry);
+    const subscriptionType = entry?.subscriptionType || entry?.subscription_type;
+
+    setCatalogCostAliases(extensionCosts, extensionName, cost);
+    getCostAliasKeys(extensionName).forEach((extensionAlias) => {
+      setCatalogValue(extensionSubscriptionTypes, extensionAlias, subscriptionType);
+    });
+
+    getCostAliasKeys(parentApp).forEach((parentAlias) => {
+      getCostAliasKeys(extensionName).forEach((extensionAlias) => {
+        setCatalogCost(
+          extensionParentCosts,
+          `${parentAlias}::${extensionAlias}`,
+          cost
+        );
+        setCatalogValue(
+          extensionParentSubscriptionTypes,
+          `${parentAlias}::${extensionAlias}`,
+          subscriptionType
+        );
+      });
+    });
+  });
+
+  return {
+    appCosts,
+    extensionCosts,
+    extensionParentCosts,
+    extensionSubscriptionTypes,
+    extensionParentSubscriptionTypes,
+  };
+}
+
+const appCostCatalog = createAppCostCatalog(appCostData);
+
+function findCatalogCost(costMap, name) {
+  const aliases = getCostAliasKeys(name);
+
+  for (const alias of aliases) {
+    const exactCost = costMap.get(alias);
+    if (Number.isFinite(exactCost)) return exactCost;
+  }
+
+  const matchingEntry = Array.from(costMap.entries()).find(([catalogName]) =>
+    aliases.some(
+      (alias) =>
+        alias.includes(catalogName) || catalogName.includes(alias)
+    )
+  );
+
+  return Number.isFinite(matchingEntry?.[1]) ? matchingEntry[1] : null;
+}
+
+function findExtensionCatalogCost(extension, costCatalog = appCostCatalog) {
+  const extensionName =
+    typeof extension === 'string' ? extension : extension?.name;
+  const parentApps = Array.isArray(extension?.parentApps)
+    ? extension.parentApps
+    : [];
+
+  for (const parentApp of parentApps) {
+    for (const parentAlias of getCostAliasKeys(parentApp)) {
+      for (const extensionAlias of getCostAliasKeys(extensionName)) {
+        const parentCost = costCatalog.extensionParentCosts.get(
+          `${parentAlias}::${extensionAlias}`
+        );
+        if (Number.isFinite(parentCost)) return parentCost;
+      }
+    }
+  }
+
+  return findCatalogCost(costCatalog.extensionCosts, extensionName);
+}
+
+function findExtensionCatalogSubscriptionType(extension, costCatalog = appCostCatalog) {
+  const extensionName =
+    typeof extension === 'string' ? extension : extension?.name;
+  const parentApps = Array.isArray(extension?.parentApps)
+    ? extension.parentApps
+    : [];
+
+  for (const parentApp of parentApps) {
+    for (const parentAlias of getCostAliasKeys(parentApp)) {
+      for (const extensionAlias of getCostAliasKeys(extensionName)) {
+        const parentSubscriptionType =
+          costCatalog.extensionParentSubscriptionTypes.get(
+            `${parentAlias}::${extensionAlias}`
+          );
+        if (parentSubscriptionType) return parentSubscriptionType;
+      }
+    }
+  }
+
+  for (const extensionAlias of getCostAliasKeys(extensionName)) {
+    const subscriptionType =
+      costCatalog.extensionSubscriptionTypes.get(extensionAlias);
+    if (subscriptionType) return subscriptionType;
+  }
+
+  return null;
+}
+
+function getMonthlyCost(appName, index, costCatalog = appCostCatalog) {
+  const configuredCost = findCatalogCost(costCatalog.appCosts, appName);
+  if (Number.isFinite(configuredCost)) return configuredCost;
+
+  const normalizedName = String(appName || '').toLowerCase();
   const matchingKey = Object.keys(pricingMap).find((key) =>
     normalizedName.includes(key.toLowerCase())
   );
@@ -596,8 +1485,37 @@ function getMonthlyCost(appName, index) {
   return fallbackCosts[index % fallbackCosts.length];
 }
 
-function getExtensionMonthlyCost(extensionName, index) {
-  const normalizedName = extensionName.toLowerCase();
+function getCostKey(pcName, appName) {
+  return `${String(pcName || '').toLowerCase()}::${String(appName || '').toLowerCase()}`;
+}
+
+function getSyncedAppCost(costOverrides, pcName, appName, fallbackCost) {
+  const syncedCost = costOverrides[getCostKey(pcName, appName)];
+  return Number.isFinite(syncedCost) ? syncedCost : fallbackCost;
+}
+
+function readCostValue(entry) {
+  const value =
+    entry?.monthly_cost ??
+    entry?.monthlyCost ??
+    entry?.unit_monthly_cost ??
+    entry?.license_cost ??
+    entry?.licenseCost ??
+    entry?.cost ??
+    entry?.amount;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function getExtensionMonthlyCost(extension, index, costCatalog = appCostCatalog) {
+  const configCost = Number(extension?.license_cost ?? extension?.licenseCost);
+  if (Number.isFinite(configCost)) return configCost;
+
+  const configuredCost = findExtensionCatalogCost(extension, costCatalog);
+  if (Number.isFinite(configuredCost)) return configuredCost;
+
+  const extensionName = typeof extension === 'string' ? extension : extension?.name;
+  const normalizedName = String(extensionName || '').toLowerCase();
   const matchingKey = Object.keys(extensionPricingMap).find((key) =>
     normalizedName.includes(key)
   );
@@ -625,8 +1543,11 @@ function getConfiguredModelSubscriptionTypes(extension, modelName) {
   return ['Subscription not reported'];
 }
 
-function getDiscoveredAppMonthlyCost(appName, index) {
-  const normalizedName = appName.toLowerCase();
+function getDiscoveredAppMonthlyCost(appName, index, costCatalog = appCostCatalog) {
+  const configuredCost = findCatalogCost(costCatalog.appCosts, appName);
+  if (Number.isFinite(configuredCost)) return configuredCost;
+
+  const normalizedName = String(appName || '').toLowerCase();
   const matchingKey = Object.keys(pricingMap).find((key) =>
     normalizedName.includes(key.toLowerCase())
   );
@@ -682,6 +1603,19 @@ function getTelemetryPcName(payload) {
   );
 }
 
+function getHourlyEngagementKey(timestampMs) {
+  const date = new Date(timestampMs);
+  date.setMinutes(0, 0, 0);
+  return date.toISOString();
+}
+
+function formatHourlyEngagementLabel(timestampMs) {
+  return new Intl.DateTimeFormat('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestampMs));
+}
+
 function getUniqueExtensionRules(extensions = []) {
   const extensionMap = new Map();
 
@@ -694,8 +1628,14 @@ function getUniqueExtensionRules(extensions = []) {
       parentApps: [],
       aiModels: [],
       aiModelLicenseTypes: {},
+      subscriptionTypes: [],
       identifiers: [],
       matchAll: [],
+      reclaimPolicy: extension.reclaim_policy,
+      license_cost: extension.license_cost,
+      firstSeenAt: extension.first_seen_at,
+      lastSeenAt: extension.last_seen_at || extension.lastSeenAt,
+      type: extension.type || 'extension',
     };
 
     if (extension.parent_app && !existing.parentApps.includes(extension.parent_app)) {
@@ -708,6 +1648,7 @@ function getUniqueExtensionRules(extensions = []) {
 
     if (extension.ai_model) {
       const licenseType =
+        extension.subscriptionType ||
         extension.ai_model_subscription ||
         extension.ai_model_license_type ||
         extension.ai_model_licence_type ||
@@ -727,6 +1668,42 @@ function getUniqueExtensionRules(extensions = []) {
 
         existing.aiModelLicenseTypes[extension.ai_model] = existingLicenseTypes;
       }
+    }
+
+      const subscriptionType = extension.subscriptionType || extension.subscription_type;
+    const catalogSubscriptionType = findExtensionCatalogSubscriptionType({
+      name: extension.name,
+      parentApps: extension.parent_app ? [extension.parent_app] : existing.parentApps,
+    });
+    [catalogSubscriptionType, subscriptionType].forEach((candidateType) => {
+      if (candidateType && !existing.subscriptionTypes.includes(candidateType)) {
+        existing.subscriptionTypes.push(candidateType);
+      }
+    });
+
+    if (extension.ai_model && catalogSubscriptionType) {
+      const existingLicenseTypes =
+        existing.aiModelLicenseTypes[extension.ai_model] || [];
+      if (!existingLicenseTypes.includes(catalogSubscriptionType)) {
+        existingLicenseTypes.push(catalogSubscriptionType);
+      }
+      existing.aiModelLicenseTypes[extension.ai_model] = existingLicenseTypes;
+    }
+
+    if (!existing.reclaimPolicy && extension.reclaim_policy) {
+      existing.reclaimPolicy = extension.reclaim_policy;
+    }
+
+    if (!existing.firstSeenAt && extension.first_seen_at) {
+      existing.firstSeenAt = extension.first_seen_at;
+    }
+
+    if (!existing.lastSeenAt && (extension.last_seen_at || extension.lastSeenAt)) {
+      existing.lastSeenAt = extension.last_seen_at || extension.lastSeenAt;
+    }
+
+    if (extension.type && !existing.type) {
+      existing.type = extension.type;
     }
 
     (extension.identifiers || []).forEach((identifier) => {
@@ -752,12 +1729,20 @@ function getModelUsageForExtension(usageMap, extensionName) {
 
   return Array.from(usageMap.entries())
     .filter(([appName]) => appName.startsWith(usagePrefix))
-    .map(([appName, totalRuntimeSeconds]) => ({
-      name: appName.slice(usagePrefix.length),
-      totalRuntimeSeconds,
-    }))
+    .map(([appName, counters]) => {
+      const usageCounters = counters || createUsageCounters();
+      return {
+        name: appName.slice(usagePrefix.length),
+        totalRuntimeSeconds: usageCounters.trackedRuntimeSeconds,
+        workedRuntimeSeconds: usageCounters.workedRuntimeSeconds,
+        automationWorkedSeconds: usageCounters.automationWorkedSeconds,
+        idleRuntimeSeconds: usageCounters.idleRuntimeSeconds,
+        consumedTokens: usageCounters.consumedTokens,
+        tokenSource: usageCounters.tokenSource,
+      };
+    })
     .sort((firstModel, secondModel) =>
-      secondModel.totalRuntimeSeconds - firstModel.totalRuntimeSeconds
+      secondModel.workedRuntimeSeconds - firstModel.workedRuntimeSeconds
     );
 }
 
@@ -766,7 +1751,9 @@ function getDetectedPcNamesForUsage(history, appName) {
 
   history.forEach((payload) => {
     const hasUsage = (payload.usage || []).some(
-      (entry) => entry.app_name === appName && entry.total_runtime_seconds > 0
+      (entry) =>
+        entry.app_name === appName &&
+        readUsageCounters(entry).foregroundRuntimeSeconds > 0
     );
 
     if (hasUsage) {
@@ -779,7 +1766,7 @@ function getDetectedPcNamesForUsage(history, appName) {
 
 function getModelLicenseBreakdown(extension) {
   const activeModelNames = extension.modelUsage
-    .filter((model) => model.totalRuntimeSeconds > 0)
+    .filter((model) => model.workedRuntimeSeconds > 0)
     .map((model) => model.name);
   const modelNames =
     activeModelNames.length > 0 ? activeModelNames : extension.aiModels;
@@ -844,6 +1831,15 @@ function NavIcon({ type }) {
         <path d="M6 15h4" />
       </>
     ),
+    reports: (
+      <>
+        <path d="M4.5 2.75h5.2L12.5 5.6v7.65h-8z" />
+        <path d="M9.5 2.9v3h2.85" />
+        <path d="M6.25 8.25h4" />
+        <path d="M6.25 10.5h2.5" />
+        <path d="M6.25 12.75h3.25" />
+      </>
+    ),
   };
 
   return (
@@ -866,14 +1862,41 @@ function NavIcon({ type }) {
   );
 }
 
+function RuntimeBreakdown({ entry }) {
+  const isAgentEntry = entry.appType === 'agent' || entry.type === 'agent';
+  const showAutomationWork =
+    isAgentEntry || entry.hasAgentExtension;
+
+  return (
+    <div className="runtime-breakdown">
+      <strong>{formatRuntime(entry.totalRuntimeSeconds)}</strong>
+      {!isAgentEntry && (
+        <span>
+          Manual Work {formatRuntime(getManualWorkedSeconds(entry))}
+        </span>
+      )}
+      {showAutomationWork && (
+        <span>
+          Automation Work {formatRuntime(entry.automationWorkedSeconds || 0)}
+        </span>
+      )}
+      <span>Idle {formatRuntime(entry.idleRuntimeSeconds || 0)}</span>
+    </div>
+  );
+}
+
 export default function App() {
+  const agentStartedAtRef = useRef(null);
   const [activeView, setActiveView] = useState('unified-dashboard');
   const [config, setConfig] = useState(null);
   const [latestTelemetry, setLatestTelemetry] = useState(null);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [error, setError] = useState('');
+  const [emailSummaryStatus, setEmailSummaryStatus] = useState('');
+  const [emailSummaryWindowKey, setEmailSummaryWindowKey] = useState(null);
   const [dispatchingDeviceId, setDispatchingDeviceId] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState('');
+  const [costOverrides, setCostOverrides] = useState({});
   const [isDeployingAgent, setIsDeployingAgent] = useState(false);
   const [deployTarget, setDeployTarget] = useState('');
   const [deployForm, setDeployForm] = useState({
@@ -884,6 +1907,17 @@ export default function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState('laptop-dx01');
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [isNavCollapsedAfterSelect, setIsNavCollapsedAfterSelect] = useState(false);
+  const [selectedReportTemplateId, setSelectedReportTemplateId] = useState('ceo-monthly');
+  const [selectedReportDimensions, setSelectedReportDimensions] = useState([
+    'Department',
+    'App',
+  ]);
+  const [selectedReportMetrics, setSelectedReportMetrics] = useState([
+    'Cost',
+    'Waste',
+  ]);
+  const [reportFrequency, setReportFrequency] = useState('Weekly');
+  const [deliveryChannel, setDeliveryChannel] = useState('Email');
   const [historicalRange, setHistoricalRange] = useState(30);
   const [sortConfig, setSortConfig] = useState({
     key: 'savingsOpportunity',
@@ -917,18 +1951,121 @@ export default function App() {
       description:
         'A single pane of glass for multi-cloud inventory, spend exposure, zombie assets, and right-sizing actions.',
     },
+    'reporting-insights': {
+      eyebrow: 'Reporting automation',
+      title: 'Reporting & Insights Center',
+      description:
+        'Create executive, audit, FinOps, and AI adoption reports with reusable templates, custom fields, exports, and scheduled distribution.',
+    },
   }[activeView];
+
+  const effectiveUsageWindowSeconds =
+    config?.usage_window_seconds || DEFAULT_USAGE_WINDOW_SECONDS;
+  const effectiveEvaluationWindowSeconds = getConfigEvaluationWindowSeconds(config);
+
+  const telemetryWindow = useMemo(() => {
+    const latestTimestampMs = getTelemetryTimestampMs(latestTelemetry);
+    const fallbackTimestampMs = Date.now();
+    const windowEndsAt = latestTimestampMs || fallbackTimestampMs;
+    const windowStartsAt = windowEndsAt - effectiveUsageWindowSeconds * 1000;
+
+    const windowHistory = telemetryHistory.filter((payload) => {
+      const timestampMs = getTelemetryTimestampMs(payload);
+      return timestampMs !== null && timestampMs >= windowStartsAt;
+    });
+
+    const firstSampleTimestampMs =
+      windowHistory.length > 0
+        ? getTelemetryTimestampMs(windowHistory[0])
+        : null;
+
+    return {
+      history: windowHistory,
+      startsAt: firstSampleTimestampMs || windowStartsAt,
+      endsAt: windowEndsAt,
+      sampleCount: windowHistory.length,
+    };
+  }, [effectiveUsageWindowSeconds, latestTelemetry, telemetryHistory]);
+
+  const evaluationWindow = useMemo(() => {
+    const agentWindow = getTelemetryEvaluationWindowMs(latestTelemetry);
+    const reportedWindowEndsAt = agentWindow?.endsAt || telemetryWindow.endsAt;
+    const reportedWindowStartsAt =
+      agentWindow?.startsAt ||
+      reportedWindowEndsAt - effectiveEvaluationWindowSeconds * 1000;
+    const currentWindow = agentWindow
+      ? getCurrentEvaluationWindow(reportedWindowStartsAt, reportedWindowEndsAt)
+      : { startsAt: reportedWindowStartsAt, endsAt: reportedWindowEndsAt };
+    const windowStartsAt = currentWindow.startsAt;
+    const windowEndsAt = currentWindow.endsAt;
+    const windowHistory = telemetryHistory.filter((payload) => {
+      const timestampMs = getTelemetryTimestampMs(payload);
+      return (
+        timestampMs !== null &&
+        timestampMs >= windowStartsAt &&
+        timestampMs <= windowEndsAt
+      );
+    });
+
+    return {
+      startsAt: windowStartsAt,
+      endsAt: windowEndsAt,
+      sampleCount: windowHistory.length,
+      isAgentReported: Boolean(agentWindow),
+      hasExpiredReportedWindow: Boolean(agentWindow) && windowStartsAt !== agentWindow.startsAt,
+    };
+  }, [
+    effectiveEvaluationWindowSeconds,
+    latestTelemetry,
+    telemetryHistory,
+    telemetryWindow.endsAt,
+  ]);
 
   const accumulatedUsage = useMemo(() => {
     const usageMap = new Map();
-    telemetryHistory.forEach((payload) => {
+
+    if (evaluationWindow.hasExpiredReportedWindow) {
+      return usageMap;
+    }
+
+    if (evaluationWindow.isAgentReported) {
+      (latestTelemetry?.usage || []).forEach((entry) => {
+        usageMap.set(entry.app_name, readUsageCounters(entry));
+      });
+      return usageMap;
+    }
+
+    telemetryWindow.history.forEach((payload) => {
       (payload.usage || []).forEach((entry) => {
-        const existing = usageMap.get(entry.app_name) || 0;
-        usageMap.set(entry.app_name, existing + entry.total_runtime_seconds);
+        const existing = usageMap.get(entry.app_name) || createUsageCounters();
+        const next = readUsageCounters(entry);
+        usageMap.set(entry.app_name, {
+          trackedRuntimeSeconds:
+            existing.trackedRuntimeSeconds + next.trackedRuntimeSeconds,
+          foregroundRuntimeSeconds:
+            existing.foregroundRuntimeSeconds + next.foregroundRuntimeSeconds,
+          workedRuntimeSeconds:
+            existing.workedRuntimeSeconds + next.workedRuntimeSeconds,
+          automationWorkedSeconds:
+            existing.automationWorkedSeconds + next.automationWorkedSeconds,
+          backgroundAutomationWorkedSeconds:
+            existing.backgroundAutomationWorkedSeconds +
+            next.backgroundAutomationWorkedSeconds,
+          idleRuntimeSeconds:
+            existing.idleRuntimeSeconds + next.idleRuntimeSeconds,
+          consumedTokens: existing.consumedTokens + next.consumedTokens,
+          selectedAiModel: next.selectedAiModel || existing.selectedAiModel,
+          tokenSource: next.tokenSource || existing.tokenSource,
+        });
       });
     });
     return usageMap;
-  }, [telemetryHistory]);
+  }, [
+    evaluationWindow.hasExpiredReportedWindow,
+    evaluationWindow.isAgentReported,
+    latestTelemetry,
+    telemetryWindow,
+  ]);
 
   const currentPcName = useMemo(
     () => getTelemetryPcName(latestTelemetry),
@@ -940,29 +2077,96 @@ export default function App() {
 
     return config.licensed_apps.map((appName, index) => {
       const appIdentity = getReadableAppIdentity(appName);
-      const totalRuntimeSeconds = accumulatedUsage.get(appName) || 0;
-      const monthlyCost = getMonthlyCost(appName, index);
-      const isReclaimable = totalRuntimeSeconds < RECLAIMABLE_THRESHOLD_SECONDS;
+      const usageCounters = getUsageCounters(accumulatedUsage, appName);
+      const totalRuntimeSeconds = usageCounters.trackedRuntimeSeconds;
+      const workedRuntimeSeconds = usageCounters.workedRuntimeSeconds;
+      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
+      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
+      const baseMonthlyCost = getMonthlyCost(appName, index);
+      const monthlyCost = getSyncedAppCost(
+        costOverrides,
+        currentPcName,
+        appName,
+        baseMonthlyCost
+      );
+      const reclaimPolicy = getAppPolicy(config, appName);
+      const firstSeenAt = getAppFirstSeenAt(config, appName);
+      const observationStartedAt = getObservationStartedAt(config, firstSeenAt);
+      const decisionObservationStartedAt = evaluationWindow.isAgentReported
+        ? new Date(evaluationWindow.startsAt).toISOString()
+        : observationStartedAt;
+      const decisionFirstSeenAt = evaluationWindow.isAgentReported
+        ? decisionObservationStartedAt
+        : firstSeenAt;
+      const decisionNowMs = evaluationWindow.isAgentReported
+        ? Date.now()
+        : telemetryWindow.endsAt;
+      const telemetryLastResetForAppMs = getTelemetryLastResetForAppMs(
+        latestTelemetry,
+        appName
+      );
+      const lastSeenAt = telemetryLastResetForAppMs
+        ? new Date(telemetryLastResetForAppMs).toISOString()
+        : getLastSeenAt(config, telemetryHistory, appName);
+      const appType = getAppType(config, appName);
+      const hasAgentExtension = appHasAgentExtension(config, appName);
+      const policyUsageCounters = evaluationWindow.isAgentReported
+        ? usageCounters
+        : getUsageCountersForWindow(
+            telemetryHistory,
+            appName,
+            telemetryWindow.endsAt,
+            getPolicyValue(reclaimPolicy, 'evaluation_window_seconds')
+          );
+      const reclaimDecision = getReclaimDecision({
+        policy: reclaimPolicy,
+        firstSeenAt: decisionFirstSeenAt,
+        observationStartedAt: decisionObservationStartedAt,
+        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
+        nowMs: decisionNowMs,
+      });
 
       return {
         appName,
         ...appIdentity,
         pcName: currentPcName,
         icon: getAppIcon(appIdentity.displayName),
-        status: isReclaimable ? 'Reclaimable' : 'Active',
+        status: reclaimDecision.status,
+        appType,
+        hasAgentExtension,
+        reclaimReason: reclaimDecision.reason,
+        firstSeenAt,
+        lastSeenAt,
+        reclaimPolicy,
         totalRuntimeSeconds,
+        workedRuntimeSeconds,
+        automationWorkedSeconds,
+        idleRuntimeSeconds,
+        utilizationPercent: getPolicyUtilizationPercent(
+          workedRuntimeSeconds,
+          reclaimPolicy
+        ),
         monthlyCost,
-        savingsOpportunity: isReclaimable ? monthlyCost : 0,
+        savingsOpportunity: reclaimDecision.savingsEligible ? monthlyCost : 0,
       };
     });
-  }, [config, accumulatedUsage, currentPcName]);
+  }, [
+    config,
+    accumulatedUsage,
+    costOverrides,
+    currentPcName,
+    evaluationWindow.isAgentReported,
+    latestTelemetry,
+    telemetryHistory,
+    telemetryWindow.endsAt,
+  ]);
 
   const usageByUrl = useMemo(() => {
     if (!config?.tracked_urls) return [];
 
     return config.tracked_urls.map((url) => ({
       url,
-      total_runtime_seconds: accumulatedUsage.get(`url:${url}`) || 0,
+      ...getUsageCounters(accumulatedUsage, `url:${url}`),
     }));
   }, [config, accumulatedUsage]);
 
@@ -970,8 +2174,71 @@ export default function App() {
     if (!config?.extensions) return [];
 
     return getUniqueExtensionRules(config.extensions).map((extension, index) => {
-      const totalRuntimeSeconds = accumulatedUsage.get(extension.name) || 0;
-      const unitMonthlyCost = getExtensionMonthlyCost(extension.name, index);
+      const usageCounters = getUsageCounters(accumulatedUsage, extension.name);
+      const isAgentExtension = extension.type === 'agent';
+      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
+      const totalRuntimeSeconds = isAgentExtension
+        ? automationWorkedSeconds
+        : usageCounters.trackedRuntimeSeconds;
+      const workedRuntimeSeconds = isAgentExtension
+        ? automationWorkedSeconds
+        : usageCounters.workedRuntimeSeconds;
+      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
+      const unitMonthlyCost = getExtensionMonthlyCost(extension, index);
+      const lastSeenAt = getLastSeenAt(
+        config,
+        telemetryHistory,
+        extension.name,
+        extension.lastSeenAt
+      );
+      const reclaimPolicy = extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY;
+      const observationStartedAt = getObservationStartedAt(
+        config,
+        extension.firstSeenAt
+      );
+      const decisionObservationStartedAt = evaluationWindow.isAgentReported
+        ? new Date(evaluationWindow.startsAt).toISOString()
+        : observationStartedAt;
+      const decisionFirstSeenAt = evaluationWindow.isAgentReported
+        ? decisionObservationStartedAt
+        : extension.firstSeenAt || decisionObservationStartedAt;
+      const decisionNowMs = evaluationWindow.isAgentReported
+        ? Date.now()
+        : telemetryWindow.endsAt;
+      const policyUsageCounters = evaluationWindow.isAgentReported
+        ? {
+            ...usageCounters,
+            workedRuntimeSeconds,
+          }
+        : getUsageCountersForWindow(
+            telemetryHistory,
+            extension.name,
+            telemetryWindow.endsAt,
+            getPolicyValue(reclaimPolicy, 'evaluation_window_seconds')
+          );
+      const modelUsage = getModelUsageForExtension(accumulatedUsage, extension.name);
+      const activeModelNames = modelUsage
+        .filter((model) => model.workedRuntimeSeconds > 0)
+        .map((model) => model.name);
+      const selectedAiModel =
+        usageCounters.selectedAiModel ||
+        modelUsage.find((model) => model.name)?.name ||
+        null;
+      const consumedTokens =
+        usageCounters.consumedTokens ||
+        modelUsage.reduce((sum, model) => sum + model.consumedTokens, 0);
+      const tokenSource =
+        usageCounters.tokenSource ||
+        modelUsage.find((model) => model.tokenSource)?.tokenSource ||
+        null;
+      const reclaimDecision = getReclaimDecision({
+        policy: reclaimPolicy,
+        firstSeenAt: decisionFirstSeenAt,
+        observationStartedAt: decisionObservationStartedAt,
+        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
+        consumedTokens,
+        nowMs: decisionNowMs,
+      });
       const detectedPcNames = getDetectedPcNamesForUsage(
         telemetryHistory,
         extension.name
@@ -980,10 +2247,7 @@ export default function App() {
         detectedPcNames.length > 0 || totalRuntimeSeconds === 0
           ? detectedPcNames.length
           : 1;
-      const modelUsage = getModelUsageForExtension(accumulatedUsage, extension.name);
-      const activeModelNames = modelUsage
-        .filter((model) => model.totalRuntimeSeconds > 0)
-        .map((model) => model.name);
+      const configuredSeatCount = Math.max(1, extension.parentApps.length);
       const modelLicenseBreakdown = getModelLicenseBreakdown({
         ...extension,
         modelUsage,
@@ -994,17 +2258,38 @@ export default function App() {
         ...extension,
         icon: getAppIcon(extension.name),
         unitMonthlyCost,
-        monthlyCost: unitMonthlyCost * detectedSeatCount,
+        monthlyCost: unitMonthlyCost * configuredSeatCount,
         detectedPcNames,
         detectedSeatCount,
+        configuredSeatCount,
         activeModelNames,
         modelUsage,
         modelLicenseBreakdown,
-        status: totalRuntimeSeconds > 0 ? 'Detected' : 'Watching',
+        status: reclaimDecision.status,
+        reclaimReason: reclaimDecision.reason,
+        reclaimPolicy,
+        firstSeenAt: extension.firstSeenAt,
+        lastSeenAt,
+        selectedAiModel,
+        consumedTokens,
+        tokenSource,
         totalRuntimeSeconds,
+        workedRuntimeSeconds,
+        automationWorkedSeconds,
+        idleRuntimeSeconds,
+        utilizationPercent: getPolicyUtilizationPercent(
+          workedRuntimeSeconds,
+          reclaimPolicy
+        ),
       };
     });
-  }, [config, accumulatedUsage, telemetryHistory]);
+  }, [
+    config,
+    accumulatedUsage,
+    evaluationWindow.isAgentReported,
+    telemetryHistory,
+    telemetryWindow.endsAt,
+  ]);
 
   const discoveredApplications = useMemo(() => {
     if (!config) return [];
@@ -1019,8 +2304,54 @@ export default function App() {
 
     (config.licensed_apps || []).forEach((appName, index) => {
       const appIdentity = getReadableAppIdentity(appName);
-      const totalRuntimeSeconds = accumulatedUsage.get(appName) || 0;
-      const unitMonthlyCost = getMonthlyCost(appName, index);
+      const usageCounters = getUsageCounters(accumulatedUsage, appName);
+      const totalRuntimeSeconds = usageCounters.trackedRuntimeSeconds;
+      const workedRuntimeSeconds = usageCounters.workedRuntimeSeconds;
+      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
+      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
+      const baseUnitMonthlyCost = getMonthlyCost(appName, index);
+      const unitMonthlyCost = getSyncedAppCost(
+        costOverrides,
+        currentPcName,
+        appName,
+        baseUnitMonthlyCost
+      );
+      const reclaimPolicy = getAppPolicy(config, appName);
+      const firstSeenAt = getAppFirstSeenAt(config, appName);
+      const observationStartedAt = getObservationStartedAt(config, firstSeenAt);
+      const decisionObservationStartedAt = evaluationWindow.isAgentReported
+        ? new Date(evaluationWindow.startsAt).toISOString()
+        : observationStartedAt;
+      const decisionFirstSeenAt = evaluationWindow.isAgentReported
+        ? decisionObservationStartedAt
+        : firstSeenAt;
+      const decisionNowMs = evaluationWindow.isAgentReported
+        ? Date.now()
+        : telemetryWindow.endsAt;
+      const telemetryLastResetForAppMs = getTelemetryLastResetForAppMs(
+        latestTelemetry,
+        appName
+      );
+      const lastSeenAt = telemetryLastResetForAppMs
+        ? new Date(telemetryLastResetForAppMs).toISOString()
+        : getLastSeenAt(config, telemetryHistory, appName);
+      const appType = getAppType(config, appName);
+      const hasAgentExtension = appHasAgentExtension(config, appName);
+      const policyUsageCounters = evaluationWindow.isAgentReported
+        ? usageCounters
+        : getUsageCountersForWindow(
+            telemetryHistory,
+            appName,
+            telemetryWindow.endsAt,
+            getPolicyValue(reclaimPolicy, 'evaluation_window_seconds')
+          );
+      const reclaimDecision = getReclaimDecision({
+        policy: reclaimPolicy,
+        firstSeenAt: decisionFirstSeenAt,
+        observationStartedAt: decisionObservationStartedAt,
+        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
+        nowMs: decisionNowMs,
+      });
       const detectedPcNames = getDetectedPcNamesForUsage(telemetryHistory, appName);
       const detectedSeatCount = detectedPcNames.length;
 
@@ -1028,16 +2359,34 @@ export default function App() {
         appName,
         ...appIdentity,
         category: 'Licensed app',
+        appType,
+        hasAgentExtension,
         icon: getAppIcon(appIdentity.displayName),
         unitMonthlyCost,
         monthlyCost: unitMonthlyCost * detectedSeatCount,
         detectedPcNames,
         detectedSeatCount,
+        status: reclaimDecision.status,
+        reclaimReason: reclaimDecision.reason,
+        reclaimPolicy,
+        firstSeenAt,
+        lastSeenAt,
         totalRuntimeSeconds,
+        workedRuntimeSeconds,
+        automationWorkedSeconds,
+        idleRuntimeSeconds,
+        utilizationPercent: getPolicyUtilizationPercent(
+          workedRuntimeSeconds,
+          reclaimPolicy
+        ),
       });
     });
 
-    Array.from(accumulatedUsage.entries()).forEach(([appName, totalRuntimeSeconds], index) => {
+    Array.from(accumulatedUsage.entries()).forEach(([appName, usageCounters], index) => {
+      const totalRuntimeSeconds = usageCounters.trackedRuntimeSeconds;
+      const workedRuntimeSeconds = usageCounters.workedRuntimeSeconds;
+      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
+      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
       if (totalRuntimeSeconds <= 0) return;
       if (appMap.has(appName)) return;
       if (appName.startsWith('url:')) return;
@@ -1049,17 +2398,25 @@ export default function App() {
       const unitMonthlyCost = getDiscoveredAppMonthlyCost(appName, index);
       const detectedPcNames = getDetectedPcNamesForUsage(telemetryHistory, appName);
       const detectedSeatCount = detectedPcNames.length > 0 ? detectedPcNames.length : 1;
+      const lastSeenAt = getLastSeenAt(config, telemetryHistory, appName);
 
       appMap.set(appName, {
         appName,
         ...appIdentity,
         category: 'Discovered app',
+        appType: 'discovered',
+        hasAgentExtension: false,
         icon: getAppIcon(appIdentity.displayName),
         unitMonthlyCost,
         monthlyCost: unitMonthlyCost * detectedSeatCount,
         detectedPcNames,
         detectedSeatCount,
+        lastSeenAt,
         totalRuntimeSeconds,
+        workedRuntimeSeconds,
+        automationWorkedSeconds,
+        idleRuntimeSeconds,
+        utilizationPercent: getUtilizationPercent(workedRuntimeSeconds, totalRuntimeSeconds),
       });
     });
 
@@ -1070,7 +2427,16 @@ export default function App() {
           secondApp.totalRuntimeSeconds - firstApp.totalRuntimeSeconds ||
           firstApp.displayName.localeCompare(secondApp.displayName)
       );
-  }, [config, accumulatedUsage, telemetryHistory]);
+  }, [
+    config,
+    accumulatedUsage,
+    costOverrides,
+    currentPcName,
+    evaluationWindow.isAgentReported,
+    latestTelemetry,
+    telemetryHistory,
+    telemetryWindow.endsAt,
+  ]);
 
   const aggregates = useMemo(() => {
     const totalWaste = usageByApp.reduce(
@@ -1089,58 +2455,69 @@ export default function App() {
     const activeSeats = usageByApp.filter((entry) => entry.status === 'Active').length;
     const totalSeats = usageByApp.length;
     const activeExtensions = usageByExtension.filter(
-      (entry) => entry.totalRuntimeSeconds > 0
+      (entry) => entry.type === 'agent' && entry.status === 'Active'
+    ).length;
+    const totalAgentExtensions = usageByExtension.filter(
+      (entry) => entry.type === 'agent'
     ).length;
     const totalExtensionRuntimeSeconds = usageByExtension.reduce(
       (sum, entry) => sum + entry.totalRuntimeSeconds,
+      0
+    );
+    const totalExtensionWorkedSeconds = usageByExtension.reduce(
+      (sum, entry) => sum + entry.workedRuntimeSeconds,
+      0
+    );
+    const totalExtensionAutomationWorkedSeconds = usageByExtension.reduce(
+      (sum, entry) => sum + entry.automationWorkedSeconds,
+      0
+    );
+    const totalExtensionIdleSeconds = usageByExtension.reduce(
+      (sum, entry) => sum + entry.idleRuntimeSeconds,
       0
     );
     const totalExtensionMonthlyCost = usageByExtension.reduce(
       (sum, entry) => sum + entry.monthlyCost,
       0
     );
-    const modelRuntimeMap = new Map();
-    const configuredModelCounts = new Map();
-
-    usageByExtension.forEach((extension) => {
-      extension.modelUsage.forEach((model) => {
-        modelRuntimeMap.set(
-          model.name,
-          (modelRuntimeMap.get(model.name) || 0) + model.totalRuntimeSeconds
-        );
-      });
-
-      extension.aiModels.forEach((modelName) => {
-        configuredModelCounts.set(
-          modelName,
-          (configuredModelCounts.get(modelName) || 0) + 1
-        );
-      });
-    });
-
-    const topRuntimeModel = Array.from(modelRuntimeMap.entries()).sort(
-      (firstModel, secondModel) => secondModel[1] - firstModel[1]
-    )[0];
-    const topConfiguredModel = Array.from(configuredModelCounts.entries()).sort(
-      (firstModel, secondModel) => secondModel[1] - firstModel[1]
-    )[0];
-    const primarySelectedModel =
-      topRuntimeModel?.[0] || topConfiguredModel?.[0] || 'Unknown';
+    const totalExtensionSavings = usageByExtension.reduce(
+      (sum, entry) => sum + (entry.status === 'Reclaimable' ? entry.monthlyCost : 0),
+      0
+    );
     const licenseEfficiencyScore =
       totalSeats > 0 ? Math.round((activeSeats / totalSeats) * 100) : 0;
+    const reclaimableSeats = Math.max(0, totalSeats - activeSeats);
+    const reclaimableAgentExtensions = Math.max(
+      0,
+      totalAgentExtensions - activeExtensions
+    );
+    const totalReclaimableLicenses = reclaimableSeats + reclaimableAgentExtensions;
+    const totalActiveLicenses = activeSeats + activeExtensions;
+    const totalLicenses = totalSeats + totalAgentExtensions;
 
     return {
       totalWaste,
       totalSavings: totalWaste,
+      totalMonthlySavings: totalWaste + totalExtensionSavings,
       activeCost,
+      totalMonthlySoftwareSpend: trackedMonthlyCost + totalExtensionMonthlyCost,
       trackedMonthlyCost,
       activeSeats,
       totalSeats,
+      reclaimableSeats,
       activeExtensions,
+      totalAgentExtensions,
+      reclaimableAgentExtensions,
+      totalReclaimableLicenses,
+      totalActiveLicenses,
+      totalLicenses,
       totalExtensions: usageByExtension.length,
       totalExtensionRuntimeSeconds,
+      totalExtensionWorkedSeconds,
+      totalExtensionAutomationWorkedSeconds,
+      totalExtensionIdleSeconds,
       totalExtensionMonthlyCost,
-      primarySelectedModel,
+      totalExtensionSavings,
       licenseEfficiencyScore,
     };
   }, [usageByApp, usageByExtension]);
@@ -1154,7 +2531,8 @@ export default function App() {
               ...extension,
               rowId: `${extension.name}:unknown:unknown`,
               modelName: 'unknown',
-              subscriptionType: 'Subscription not reported',
+              subscriptionType:
+                extension.subscriptionTypes?.[0] || 'Subscription not reported',
             },
           ];
         }
@@ -1176,10 +2554,18 @@ export default function App() {
       const firstValue = firstRow[sortConfig.key];
       const secondValue = secondRow[sortConfig.key];
 
+      if (sortConfig.key.endsWith('SeenAt')) {
+        const firstTime = getFirstSeenTimestampMs(firstValue) || 0;
+        const secondTime = getFirstSeenTimestampMs(secondValue) || 0;
+        return sortConfig.direction === 'asc'
+          ? firstTime - secondTime
+          : secondTime - firstTime;
+      }
+
       if (typeof firstValue === 'string') {
         return sortConfig.direction === 'asc'
-          ? firstValue.localeCompare(secondValue)
-          : secondValue.localeCompare(firstValue);
+          ? firstValue.localeCompare(secondValue || '')
+          : (secondValue || '').localeCompare(firstValue);
       }
 
       return sortConfig.direction === 'asc'
@@ -1289,7 +2675,13 @@ export default function App() {
 
     return selectedDevice.trackedApps.map((appName, index) => {
       const appIdentity = getReadableAppIdentity(appName);
-      const monthlyCost = getMonthlyCost(appName, index);
+      const baseMonthlyCost = getMonthlyCost(appName, index);
+      const monthlyCost = getSyncedAppCost(
+        costOverrides,
+        selectedDevice.pcName,
+        appName,
+        baseMonthlyCost
+      );
       const totalRuntimeSeconds = selectedDevice.isLive
         ? (index + 1) * 1880
         : index * 420;
@@ -1298,20 +2690,163 @@ export default function App() {
         appName,
         ...appIdentity,
         icon: getAppIcon(appIdentity.displayName),
+        hasAgentExtension: appHasAgentExtension(config, appName),
         status:
           selectedDevice.isLive && totalRuntimeSeconds >= RECLAIMABLE_THRESHOLD_SECONDS
             ? 'Active'
             : 'Reclaimable',
         totalRuntimeSeconds,
+        workedRuntimeSeconds: totalRuntimeSeconds,
+        automationWorkedSeconds: 0,
+        idleRuntimeSeconds: 0,
+        utilizationPercent: getUtilizationPercent(totalRuntimeSeconds, totalRuntimeSeconds),
         monthlyCost,
       };
     });
-  }, [selectedDevice, usageByApp]);
+  }, [config, costOverrides, selectedDevice, usageByApp]);
+
+  const selectedDeviceEngagementSeries = useMemo(
+    () =>
+      selectedDeviceApps
+        .filter((entry) => entry.monthlyCost > 0)
+        .sort(
+          (firstApp, secondApp) =>
+            secondApp.workedRuntimeSeconds - firstApp.workedRuntimeSeconds ||
+            secondApp.monthlyCost - firstApp.monthlyCost ||
+            firstApp.displayName.localeCompare(secondApp.displayName)
+        )
+        .map((entry, index) => ({
+          appName: entry.appName,
+          dataKey: `app${index}`,
+          name: entry.displayName,
+          color: engagementChartColors[index % engagementChartColors.length],
+        })),
+    [selectedDeviceApps]
+  );
+
+  const selectedDeviceEngagementData = useMemo(() => {
+    if (!selectedDevice || selectedDeviceEngagementSeries.length === 0) {
+      return [];
+    }
+
+    if (selectedDevice.id !== 'laptop-dx01') {
+      return engagementVelocity.map((entry) => {
+        const point = { time: entry.time };
+        selectedDeviceEngagementSeries.forEach((series, index) => {
+          const sourceKey = ['adobeCc', 'jetBrains', 'vsCode'][index % 3];
+          point[series.dataKey] = entry[sourceKey] || 0;
+        });
+        return point;
+      });
+    }
+
+    const latestTimestampMs =
+      getTelemetryTimestampMs(latestTelemetry) || Date.now();
+    const latestHour = new Date(latestTimestampMs);
+    latestHour.setMinutes(0, 0, 0);
+    const firstHourMs = latestHour.getTime() - 23 * 60 * 60 * 1000;
+    const seriesByAppName = new Map(
+      selectedDeviceEngagementSeries.map((series) => [series.appName, series])
+    );
+    const buckets = new Map();
+
+    for (let index = 0; index < 24; index += 1) {
+      const bucketMs = firstHourMs + index * 60 * 60 * 1000;
+      const point = {
+        time: formatHourlyEngagementLabel(bucketMs),
+      };
+      selectedDeviceEngagementSeries.forEach((series) => {
+        point[series.dataKey] = 0;
+      });
+      buckets.set(getHourlyEngagementKey(bucketMs), point);
+    }
+
+    telemetryHistory.forEach((payload) => {
+      const timestampMs = getTelemetryTimestampMs(payload);
+      if (timestampMs === null || timestampMs < firstHourMs) return;
+
+      const bucket = buckets.get(getHourlyEngagementKey(timestampMs));
+      if (!bucket) return;
+
+      (payload.usage || []).forEach((usageEntry) => {
+        const series = seriesByAppName.get(usageEntry.app_name);
+        if (!series) return;
+
+        const counters = readUsageCounters(usageEntry);
+        const activeMinutes = Math.round(counters.workedRuntimeSeconds / 60);
+        bucket[series.dataKey] = Math.max(bucket[series.dataKey], activeMinutes);
+      });
+    });
+
+    const currentBucket = buckets.get(getHourlyEngagementKey(latestTimestampMs));
+    if (currentBucket) {
+      selectedDeviceEngagementSeries.forEach((series) => {
+        const appEntry = selectedDeviceApps.find(
+          (entry) => entry.appName === series.appName
+        );
+        const activeMinutes = Math.round(
+          (appEntry?.workedRuntimeSeconds || 0) / 60
+        );
+        currentBucket[series.dataKey] = Math.max(
+          currentBucket[series.dataKey],
+          activeMinutes
+        );
+      });
+    }
+
+    return Array.from(buckets.values());
+  }, [
+    latestTelemetry,
+    selectedDevice,
+    selectedDeviceApps,
+    selectedDeviceEngagementSeries,
+    telemetryHistory,
+  ]);
+
+  const selectedDeviceTrackingMetrics = useMemo(() => {
+    const selectedAppNames = new Set(
+      selectedDeviceApps.map((entry) => entry.appName)
+    );
+    const licensedApplications = selectedDeviceApps.filter(
+      (entry) => entry.monthlyCost > 0
+    );
+    const agentExtensions = usageByExtension.filter(
+      (extension) =>
+        extension.type === 'agent' &&
+        extension.parentApps.some((parentApp) => selectedAppNames.has(parentApp))
+    );
+    const activeLicensedApplications = licensedApplications.filter(
+      (entry) => entry.status === 'Active'
+    );
+    const activeAgentExtensions = agentExtensions.filter(
+      (extension) => extension.status === 'Active'
+    );
+    const appLicenseCost = licensedApplications.reduce(
+      (sum, entry) => sum + entry.monthlyCost,
+      0
+    );
+    const aiLicenseCost = agentExtensions.reduce(
+      (sum, extension) => sum + extension.monthlyCost,
+      0
+    );
+
+    return {
+      totalLicenseCount: licensedApplications.length + agentExtensions.length,
+      activeLicenseCount:
+        activeLicensedApplications.length + activeAgentExtensions.length,
+      totalLicenseCost: appLicenseCost + aiLicenseCost,
+      agentExtensionCount: agentExtensions.length,
+      trackedApplicationCount: licensedApplications.length,
+    };
+  }, [selectedDeviceApps, usageByExtension]);
 
   const selectedDeviceLastHeartbeat = useMemo(() => {
     if (!selectedDevice?.isLive) return 'No heartbeat in the last 24h';
-    if (selectedDevice.id === 'laptop-dx01' && latestTelemetry?.timestamp) {
-      return new Date(latestTelemetry.timestamp).toLocaleString();
+    if (selectedDevice.id === 'laptop-dx01') {
+      const lastResetMs = getTelemetryLastResetMs(latestTelemetry);
+      const fallbackTelemetryMs = getTelemetryTimestampMs(latestTelemetry);
+      const lastSeenMs = lastResetMs || fallbackTelemetryMs;
+      if (lastSeenMs) return new Date(lastSeenMs).toLocaleString();
     }
     return new Date().toLocaleString();
   }, [latestTelemetry, selectedDevice]);
@@ -1481,6 +3016,181 @@ export default function App() {
     []
   );
 
+  const selectedReportTemplate = useMemo(
+    () =>
+      reportTemplates.find((template) => template.id === selectedReportTemplateId) ||
+      reportTemplates[0],
+    [selectedReportTemplateId]
+  );
+
+  const nextRunDate = useMemo(() => {
+    const date = new Date();
+    const daysToAdd = {
+      Daily: 1,
+      Weekly: 7,
+      Monthly: 30,
+    }[reportFrequency];
+
+    date.setDate(date.getDate() + daysToAdd);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    });
+  }, [reportFrequency]);
+
+  const reportRecipients = useMemo(
+    () =>
+      deliveryChannel === 'Slack'
+        ? ['#finance-ops', '#it-asset-review', '#platform-finops']
+        : [
+            'ceo@agentops.local',
+            'finance@agentops.local',
+            'it-audit@agentops.local',
+          ],
+    [deliveryChannel]
+  );
+
+  const reportPreviewStats = useMemo(
+    () => [
+      {
+        label: 'Included dimensions',
+        value: selectedReportDimensions.length,
+      },
+      {
+        label: 'Included metrics',
+        value: selectedReportMetrics.length,
+      },
+      {
+        label: 'Estimated rows',
+        value:
+          Math.max(1, selectedReportDimensions.length) *
+          Math.max(1, selectedReportMetrics.length) *
+          48,
+      },
+    ],
+    [selectedReportDimensions, selectedReportMetrics]
+  );
+
+  const emailRecipient = appConfig?.email?.trim();
+
+  const sendEmailSummary = useCallback(async () => {
+    if (!emailRecipient) {
+      throw new Error('Recipient email is not configured.');
+    }
+
+    if (!evaluationWindow?.endsAt) {
+      throw new Error('Evaluation window is not ready yet.');
+    }
+
+    const windowKey = `${evaluationWindow.startsAt}-${evaluationWindow.endsAt}`;
+    if (emailSummaryWindowKey === windowKey || sentEmailSummaryWindowKeys.has(windowKey)) {
+      setEmailSummaryStatus('Evaluation summary already sent for this window.');
+      return;
+    }
+
+    setEmailSummaryStatus(`Sending evaluation summary to ${emailRecipient}...`);
+    const subject = createEmailSummarySubject(evaluationWindow.endsAt);
+    const { text, html } = createEmailSummaryBody({
+      evaluationWindow,
+      aggregates,
+      cloudSummary,
+      unifiedSummary,
+      topSavingsOpportunities,
+      usageByApp,
+      usageByExtension,
+    });
+
+    const response = await fetch('http://localhost:3000/send-email-summary', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        recipient: emailRecipient,
+        subject,
+        body: text,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Email service failed: ${errorText || response.statusText}`);
+    }
+
+    sentEmailSummaryWindowKeys.add(windowKey);
+    setEmailSummaryStatus(`Evaluation summary sent to ${emailRecipient}.`);
+    setEmailSummaryWindowKey(windowKey);
+  }, [
+    emailRecipient,
+    evaluationWindow,
+    emailSummaryWindowKey,
+    aggregates,
+    cloudSummary,
+    unifiedSummary,
+    topSavingsOpportunities,
+    usageByApp,
+    usageByExtension,
+  ]);
+
+  useEffect(() => {
+    if (!emailRecipient || !evaluationWindow.endsAt) {
+      return undefined;
+    }
+
+    const windowKey = `${evaluationWindow.startsAt}-${evaluationWindow.endsAt}`;
+    if (emailSummaryWindowKey === windowKey || sentEmailSummaryWindowKeys.has(windowKey)) {
+      return undefined;
+    }
+
+    const executeSend = () => {
+      sendEmailSummary().catch((err) => {
+        setEmailSummaryStatus(`Email send failed: ${err.message}`);
+      });
+    };
+
+    const nowMs = Date.now();
+    if (nowMs >= evaluationWindow.endsAt) {
+      executeSend();
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(
+      executeSend,
+      Math.max(0, evaluationWindow.endsAt - nowMs)
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    emailRecipient,
+    evaluationWindow.endsAt,
+    evaluationWindow.startsAt,
+    emailSummaryWindowKey,
+    aggregates,
+    cloudSummary,
+    unifiedSummary,
+    topSavingsOpportunities,
+    usageByApp,
+    usageByExtension,
+    sendEmailSummary,
+  ]);
+
+  const toggleReportDimension = (dimension) => {
+    setSelectedReportDimensions((currentDimensions) =>
+      currentDimensions.includes(dimension)
+        ? currentDimensions.filter((item) => item !== dimension)
+        : [...currentDimensions, dimension]
+    );
+  };
+
+  const toggleReportMetric = (metric) => {
+    setSelectedReportMetrics((currentMetrics) =>
+      currentMetrics.includes(metric)
+        ? currentMetrics.filter((item) => item !== metric)
+        : [...currentMetrics, metric]
+    );
+  };
+
   const requestSort = (key) => {
     setSortConfig((currentSort) => ({
       key,
@@ -1551,6 +3261,22 @@ export default function App() {
     setShowAgentDetails(true);
   };
 
+  const resetForAgentStartChange = (payload) => {
+    const nextAgentStartedAt = getAgentStartedTimestampMs(payload);
+    if (!nextAgentStartedAt) return false;
+
+    const previousAgentStartedAt = agentStartedAtRef.current;
+    agentStartedAtRef.current = nextAgentStartedAt;
+
+    if (!previousAgentStartedAt || previousAgentStartedAt === nextAgentStartedAt) {
+      return false;
+    }
+
+    setTelemetryHistory([]);
+    setLatestTelemetry(null);
+    return true;
+  };
+
   const loadConfig = () => {
     fetch('http://localhost:8080/config')
       .then((response) => {
@@ -1569,6 +3295,7 @@ export default function App() {
         if (data.extensions && !Array.isArray(data.extensions)) {
           throw new Error('extensions must be an array.');
         }
+        resetForAgentStartChange(data);
         setConfig(data);
         setError('');
       })
@@ -1587,6 +3314,7 @@ export default function App() {
         return response.json();
       })
       .then((data) => {
+        const agentRestarted = resetForAgentStartChange(data);
         setLatestTelemetry(data);
         setError('');
 
@@ -1602,7 +3330,7 @@ export default function App() {
             return currentHistory;
           }
 
-          return [...currentHistory, data];
+          return agentRestarted ? [data] : [...currentHistory, data];
         });
       })
       .catch((err) => {
@@ -1702,6 +3430,18 @@ export default function App() {
             </span>
             <span className="nav-label">Cloud Asset Management</span>
           </button>
+          <button
+            className={
+              activeView === 'reporting-insights' ? 'nav-link active' : 'nav-link'
+            }
+            type="button"
+            onClick={(event) => handleNavSelection(event, 'reporting-insights')}
+          >
+            <span className="nav-glyph">
+              <NavIcon type="reports" />
+            </span>
+            <span className="nav-label">Reporting & Insights</span>
+          </button>
         </div>
       </nav>
 
@@ -1715,6 +3455,9 @@ export default function App() {
         </header>
 
         {error && <div className="error-message">{error}</div>}
+        {emailSummaryStatus && (
+          <div className="email-summary-status">{emailSummaryStatus}</div>
+        )}
 
         {activeView === 'unified-dashboard' && (
           <>
@@ -1919,50 +3662,342 @@ export default function App() {
           </>
         )}
 
+        {activeView === 'reporting-insights' && (
+          <>
+          <section className="summary-grid report-summary-grid" aria-label="Reporting summary">
+            <article className="summary-card">
+              <span>Active Schedules</span>
+              <strong>12</strong>
+              <small>Automated reports across finance, IT, and engineering</small>
+            </article>
+            <article className="summary-card summary-card-success">
+              <span>Current Template</span>
+              <strong>{selectedReportTemplate.name}</strong>
+              <small>{selectedReportTemplate.audience} - {selectedReportTemplate.format}</small>
+            </article>
+            <article className="summary-card">
+              <span>Next Run</span>
+              <strong>{nextRunDate}</strong>
+              <small>{reportFrequency} delivery via {deliveryChannel}</small>
+            </article>
+            <article className="summary-card summary-card-alert">
+              <span>Export Ready</span>
+              <strong>3</strong>
+              <small>PDF, Excel/CSV, and JSON output profiles available</small>
+            </article>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Report Template Gallery</h2>
+                <p>One-click templates for leadership, compliance, infrastructure, and engineering adoption reporting.</p>
+              </div>
+              <span className="last-updated">4 templates</span>
+            </div>
+            <div className="report-template-grid">
+              {reportTemplates.map((template) => (
+                <article
+                  className={
+                    selectedReportTemplateId === template.id
+                      ? 'report-template-card active'
+                      : 'report-template-card'
+                  }
+                  key={template.id}
+                >
+                  <div className="report-template-topline">
+                    <span className={`report-accent ${template.accent}`} />
+                    <small>{template.audience}</small>
+                  </div>
+                  <h3>{template.name}</h3>
+                  <p>{template.description}</p>
+                  <div className="report-template-meta">
+                    <span>{template.owner}</span>
+                    <span>{template.cadence}</span>
+                    <span>{template.format}</span>
+                  </div>
+                  <div className="report-section-list">
+                    {template.includedSections.map((section) => (
+                      <span key={section}>{section}</span>
+                    ))}
+                  </div>
+                  <button
+                    className="report-select-button"
+                    type="button"
+                    onClick={() => setSelectedReportTemplateId(template.id)}
+                  >
+                    {selectedReportTemplateId === template.id
+                      ? 'Selected Template'
+                      : 'Use Template'}
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="report-builder-grid">
+            <article className="panel compact-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Custom Report Builder</h2>
+                  <p>Select dimensions and metrics to shape an analysis-ready report query.</p>
+                </div>
+              </div>
+              <div className="query-builder">
+                <div className="query-builder-column">
+                  <h3>Dimensions</h3>
+                  {reportDimensions.map((dimension) => (
+                    <label className="query-check" key={dimension}>
+                      <input
+                        checked={selectedReportDimensions.includes(dimension)}
+                        type="checkbox"
+                        onChange={() => toggleReportDimension(dimension)}
+                      />
+                      <span>{dimension}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="query-builder-column">
+                  <h3>Metrics</h3>
+                  {reportMetrics.map((metric) => (
+                    <label className="query-check" key={metric}>
+                      <input
+                        checked={selectedReportMetrics.includes(metric)}
+                        type="checkbox"
+                        onChange={() => toggleReportMetric(metric)}
+                      />
+                      <span>{metric}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="query-preview-card">
+                  <span>Query Preview</span>
+                  <strong>
+                    {selectedReportDimensions.join(' + ') || 'No dimensions'}
+                  </strong>
+                  <small>
+                    Metrics: {selectedReportMetrics.join(', ') || 'none selected'}
+                  </small>
+                  <div className="report-preview-stats">
+                    {reportPreviewStats.map((stat) => (
+                      <div key={stat.label}>
+                        <span>{stat.label}</span>
+                        <b>{formatNumber(stat.value)}</b>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article className="panel compact-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Distribution Settings</h2>
+                  <p>Schedule recurring report delivery to email or Slack recipients.</p>
+                </div>
+              </div>
+              <div className="distribution-panel">
+                <div className="distribution-controls">
+                  <label className="filter-control">
+                    <span>Frequency</span>
+                    <select
+                      value={reportFrequency}
+                      onChange={(event) => setReportFrequency(event.target.value)}
+                    >
+                      <option>Daily</option>
+                      <option>Weekly</option>
+                      <option>Monthly</option>
+                    </select>
+                  </label>
+                  <label className="filter-control">
+                    <span>Channel</span>
+                    <select
+                      value={deliveryChannel}
+                      onChange={(event) => setDeliveryChannel(event.target.value)}
+                    >
+                      <option>Email</option>
+                      <option>Slack</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="next-run-card">
+                  <span>Next Run Date</span>
+                  <strong>{nextRunDate}</strong>
+                  <small>{selectedReportTemplate.name} will be delivered {reportFrequency.toLowerCase()}.</small>
+                </div>
+                <div className="recipient-list">
+                  <span>Recipients</span>
+                  {reportRecipients.map((recipient) => (
+                    <div key={recipient}>
+                      <strong>{recipient}</strong>
+                      <small>{deliveryChannel === 'Slack' ? 'Slack channel' : 'Email recipient'}</small>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Export Engine</h2>
+                <p>Generate presentation, finance-analysis, or integration-ready outputs from the selected report.</p>
+              </div>
+            </div>
+            <div className="export-engine-grid">
+              <article>
+                <span>PDF</span>
+                <strong>Branded Executive Pack</strong>
+                <small>Highly styled, non-editable report for leadership presentation.</small>
+                <button type="button">Export PDF</button>
+              </article>
+              <article>
+                <span>Excel / CSV</span>
+                <strong>Raw Finance Rows</strong>
+                <small>Analysis-ready rows for finance modeling, pivots, and reconciliation.</small>
+                <button type="button">Export Excel/CSV</button>
+              </article>
+              <article>
+                <span>JSON</span>
+                <strong>Enterprise Integration</strong>
+                <small>Structured payload for BI, workflow, and internal platform ingestion.</small>
+                <button type="button">Export JSON</button>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Report History & Versioning</h2>
+                <p>Previously generated reports with versions, owners, download links, and sharing actions.</p>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table className="report-history-table">
+                <thead>
+                  <tr>
+                    <th>Report</th>
+                    <th>Type</th>
+                    <th>Generated</th>
+                    <th>Version</th>
+                    <th>Format</th>
+                    <th>Owner</th>
+                    <th>Download</th>
+                    <th>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportHistory.map((report) => (
+                    <tr key={report.id}>
+                      <td>
+                        <strong>{report.name}</strong>
+                      </td>
+                      <td>{report.type}</td>
+                      <td>{report.generatedAt}</td>
+                      <td>{report.version}</td>
+                      <td>{report.format}</td>
+                      <td>{report.owner}</td>
+                      <td>
+                        <button className="download-link-button" type="button">
+                          Download
+                        </button>
+                      </td>
+                      <td>
+                        <button className="share-icon-button" type="button" aria-label={`Share ${report.name}`}>
+                          <span className="action-symbol">↗</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          </>
+        )}
+
         {activeView === 'dashboard' && (
           <>
           <section className="summary-grid" aria-label="Executive summary">
             <article className="summary-card">
               <span>Total Monthly Software Spend</span>
-              <strong>{formatCurrency(TOTAL_MONTHLY_SOFTWARE_SPEND)}</strong>
-              <small>Mock licensed portfolio total</small>
+              <strong>{formatCurrency(aggregates.totalMonthlySoftwareSpend)}</strong>
+              <small>App license cost + AI license cost</small>
             </article>
             <article className="summary-card summary-card-alert">
               <span>Identified Monthly Savings</span>
-              <strong>{formatCurrency(aggregates.totalSavings)}</strong>
-              <small>{formatCurrency(aggregates.totalWaste)} waste detected</small>
+              <strong>{formatCurrency(aggregates.totalMonthlySavings)}</strong>
+              <small>Reclaimable app cost + AI license cost</small>
             </article>
             <article className="summary-card">
-              <span>License Efficiency Score</span>
-              <strong>{aggregates.licenseEfficiencyScore}%</strong>
-              <small>
-                {aggregates.activeSeats} active of {aggregates.totalSeats} licensed
-                seats
-              </small>
-            </article>
-            <article className="summary-card">
-              <span>AI Extensions Detected</span>
+              <span>Reclaimable Licenses</span>
               <strong>
-                {aggregates.activeExtensions}/{aggregates.totalExtensions}
+                {aggregates.totalReclaimableLicenses}{' '}
+                <small className="inline-strong-note">
+                  from {aggregates.totalLicenses} total licenses
+                </small>
               </strong>
-              <small>Nested extension counters bound to focused parent apps</small>
+              <small>
+                {aggregates.reclaimableSeats} App Licenses +{' '}
+                {aggregates.reclaimableAgentExtensions} AI Licenses
+              </small>
             </article>
           </section>
 
           <section className="panel">
             <div className="panel-header">
               <div>
-                <h2>Main Utilization Table</h2>
+                <h2>App Licenses</h2>
                 <p>
-                  Reclaimable licenses are seats with less than 1 hour of tracked
-                  active runtime.
+                  Reclaimable licenses are evaluated per app policy after the
+                  minimum observation period. The idle grace period is{' '}
+                  {formatRuntime(config?.idle_threshold_seconds ?? 120)}.
                 </p>
+                <div className="tracking-window-meta">
+                  <span>
+                    Evaluation window: {formatDateTime(evaluationWindow.startsAt)} to{' '}
+                    {formatDateTime(evaluationWindow.endsAt)}
+                  </span>
+                  <span>{evaluationWindow.sampleCount} telemetry samples</span>
+                </div>
               </div>
-              {latestTelemetry?.timestamp && (
-                <span className="last-updated">
-                  Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
-                </span>
-              )}
+              <div className="panel-actions">
+                {latestTelemetry?.timestamp && (
+                  <span className="last-updated">
+                    Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
+                  </span>
+                )}
+                <button
+                  className="dispatch-button"
+                  type="button"
+                  onClick={() => {
+                    sendEmailSummary().catch((err) => {
+                      setEmailSummaryStatus(`Email send failed: ${err.message}`);
+                    });
+                  }}
+                >
+                  Send Email Summary Now
+                </button>
+              </div>
+            </div>
+
+            <div className="extension-summary-grid" aria-label="App license summary">
+              <div>
+                <span>Overall monthly cost</span>
+                <strong>{formatCurrency(aggregates.trackedMonthlyCost)}</strong>
+              </div>
+              <div>
+                <span>Identified Monthly Savings</span>
+                <strong>{formatCurrency(aggregates.totalSavings)}</strong>
+              </div>
+              <div>
+                <span>App Licenses</span>
+                <strong>{aggregates.totalSeats}</strong>
+                <small>{aggregates.activeSeats} Actively Working</small>
+              </div>
             </div>
 
             <div className="table-wrap">
@@ -1989,9 +4024,10 @@ export default function App() {
                         type="button"
                         onClick={() => requestSort('totalRuntimeSeconds')}
                       >
-                        Active Runtime{renderSortIndicator('totalRuntimeSeconds')}
+                        Tracked Runtime{renderSortIndicator('totalRuntimeSeconds')}
                       </button>
                     </th>
+                    <th>Utilization</th>
                     <th>
                       <button
                         type="button"
@@ -2028,17 +4064,17 @@ export default function App() {
                       </td>
                       <td>
                         <span
-                          className={`status-badge ${
-                            entry.status === 'Active'
-                              ? 'status-active'
-                              : 'status-reclaimable'
-                          }`}
+                          className={`status-badge ${getStatusBadgeClass(entry.status)}`}
+                          title={entry.reclaimReason}
                         >
                           {entry.status}
                         </span>
                       </td>
-                      <td>{formatRuntime(entry.totalRuntimeSeconds)}</td>
-                      <td>{formatCurrency(entry.monthlyCost)}</td>
+                      <td><RuntimeBreakdown entry={entry} /></td>
+                      <td>{entry.utilizationPercent}%</td>
+                      <td className="cost-impact-value">
+                        -{formatCurrency(entry.monthlyCost)}
+                      </td>
                       <td
                         className={
                           entry.savingsOpportunity > 0
@@ -2047,7 +4083,7 @@ export default function App() {
                         }
                       >
                         {entry.savingsOpportunity > 0
-                          ? `-${formatCurrency(entry.savingsOpportunity)}`
+                          ? `+${formatCurrency(entry.savingsOpportunity)}`
                           : formatCurrency(0)}
                       </td>
                       <td>
@@ -2064,7 +4100,7 @@ export default function App() {
                   ))}
                   {sortedUsageByApp.length === 0 && (
                     <tr>
-                      <td colSpan="7" className="empty-state">
+                      <td colSpan="8" className="empty-state">
                         Waiting for licensed app configuration.
                       </td>
                     </tr>
@@ -2077,7 +4113,7 @@ export default function App() {
           <section className="panel compact-panel">
             <div className="panel-header">
               <div>
-                <h2>AI & Extension Attribution</h2>
+                <h2>AI Licenses</h2>
                 <p>Nested extension usage is counted only while the host application is focused.</p>
               </div>
             </div>
@@ -2088,12 +4124,13 @@ export default function App() {
                 <strong>{formatCurrency(aggregates.totalExtensionMonthlyCost)}</strong>
               </div>
               <div>
-                <span>Total runtime</span>
-                <strong>{formatRuntime(aggregates.totalExtensionRuntimeSeconds)}</strong>
+                <span>Identified Monthly Savings</span>
+                <strong>{formatCurrency(aggregates.totalExtensionSavings)}</strong>
               </div>
               <div>
-                <span>Mostly selected model</span>
-                <strong>{aggregates.primarySelectedModel}</strong>
+                <span>AI Agent Licenses</span>
+                <strong>{aggregates.totalAgentExtensions}</strong>
+                <small>{aggregates.activeExtensions} Actively Working</small>
               </div>
             </div>
 
@@ -2101,19 +4138,26 @@ export default function App() {
               <table className="attribution-table extension-attribution-table">
                 <thead>
                   <tr>
+                    <th>PC Name</th>
                     <th>Extension Identity</th>
-                    <th>Subscription Type</th>
                     <th>Status</th>
-                    <th>Total Runtime</th>
-                    <th>Fleet Monthly Cost</th>
-                    <th>Unit Monthly Cost</th>
-                    <th>Discovered PCs</th>
-                    <th>Selected Model</th>
+                    <th>Tracked Runtime</th>
+                    <th>Utilization</th>
+                    <th>Cost Impact</th>
+                    <th>Savings Opportunity</th>
+                    <th>Explore</th>
                   </tr>
                 </thead>
                 <tbody>
                   {extensionAttributionRows.map((extension) => (
                     <tr key={extension.rowId}>
+                      <td>
+                        <span className="pc-list">
+                          {extension.detectedPcNames.length > 0
+                            ? extension.detectedPcNames.join(', ')
+                            : currentPcName}
+                        </span>
+                      </td>
                       <td>
                         <div className="app-identity">
                           <span className="app-icon extension-icon">
@@ -2121,42 +4165,48 @@ export default function App() {
                           </span>
                           <span className="app-name-stack">
                             <strong>{extension.name}</strong>
+                            <small>{extension.subscriptionType}</small>
                             <small>{extension.parentApps.join(', ')}</small>
                           </span>
                         </div>
                       </td>
                       <td>
-                        <span className="pc-list">
-                          {extension.subscriptionType}
-                        </span>
-                      </td>
-                      <td>
                         <span
-                          className={`status-badge ${
-                            extension.status === 'Detected'
-                              ? 'status-active'
-                              : 'status-neutral'
-                          }`}
+                          className={`status-badge ${getStatusBadgeClass(extension.status)}`}
+                          title={extension.reclaimReason}
                         >
                           {extension.status}
                         </span>
                       </td>
-                      <td>{formatRuntime(extension.totalRuntimeSeconds)}</td>
-                      <td>{formatCurrency(extension.monthlyCost)}</td>
-                      <td>{formatCurrency(extension.unitMonthlyCost)} / PC</td>
-                      <td>
-                        <span className="pc-list">
-                          {extension.detectedSeatCount > 0
-                            ? `${extension.detectedSeatCount} PC${
-                                extension.detectedSeatCount === 1 ? '' : 's'
-                              } (${extension.detectedPcNames.join(', ')})`
-                            : 'none yet'}
-                        </span>
+                      <td><RuntimeBreakdown entry={extension} /></td>
+                      <td>{extension.utilizationPercent}%</td>
+                      <td className="cost-impact-value">
+                        -{formatCurrency(extension.monthlyCost)}
+                      </td>
+                      <td
+                        className={
+                          extension.status === 'Reclaimable'
+                            ? 'savings-value'
+                            : 'muted-value'
+                        }
+                      >
+                        {extension.status === 'Reclaimable'
+                          ? `+${formatCurrency(extension.monthlyCost)}`
+                          : formatCurrency(0)}
                       </td>
                       <td>
-                        <span className="pc-list">
-                          {extension.modelName}
-                        </span>
+                        <button
+                          className="explore-button"
+                          type="button"
+                          onClick={() =>
+                            handleExploreDashboardAgent(
+                              extension.detectedPcNames[0] || currentPcName
+                            )
+                          }
+                        >
+                          <span className="action-symbol">â€º</span>
+                          Explore
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -2164,75 +4214,6 @@ export default function App() {
                     <tr>
                       <td colSpan="8" className="empty-state">
                         Waiting for extension attribution rules from the agent.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel compact-panel">
-            <div className="panel-header">
-              <div>
-                <h2>Application Attribution</h2>
-                <p>All app identities from licensed configuration plus additional apps discovered in telemetry.</p>
-              </div>
-            </div>
-
-            <div className="table-wrap attribution-table-wrap">
-              <table className="attribution-table">
-                <thead>
-                  <tr>
-                    <th>App Identity</th>
-                    <th>Type</th>
-                    <th>Total Runtime</th>
-                    <th>Fleet Monthly Cost</th>
-                    <th>Unit Monthly Cost</th>
-                    <th>Discovered PCs</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {discoveredApplications.map((app) => (
-                    <tr key={app.appName}>
-                      <td>
-                        <div className="app-identity">
-                          <span className="app-icon">{app.icon}</span>
-                          <span className="app-name-stack">
-                            <strong>{app.displayName}</strong>
-                            {app.shouldShowRawName && <small>{app.rawName}</small>}
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <span
-                          className={`status-badge ${
-                            app.totalRuntimeSeconds > 0
-                              ? 'status-active'
-                              : 'status-neutral'
-                          }`}
-                        >
-                          {app.totalRuntimeSeconds > 0 ? app.category : 'Watching'}
-                        </span>
-                      </td>
-                      <td>{formatRuntime(app.totalRuntimeSeconds)}</td>
-                      <td>{formatCurrency(app.monthlyCost)}</td>
-                      <td>{formatCurrency(app.unitMonthlyCost)} / PC</td>
-                      <td>
-                        <span className="pc-list">
-                          {app.detectedSeatCount} PC
-                          {app.detectedSeatCount === 1 ? '' : 's'}
-                          {app.detectedPcNames.length > 0
-                            ? ` (${app.detectedPcNames.join(', ')})`
-                            : ''}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {discoveredApplications.length === 0 && (
-                    <tr>
-                      <td colSpan="6" className="empty-state">
-                        Waiting for licensed app configuration or application telemetry.
                       </td>
                     </tr>
                   )}
@@ -2991,7 +4972,7 @@ export default function App() {
                   <small>Policy: {selectedDevice.policy}</small>
                 </article>
                 <article className="detail-card">
-                  <span>Last Heartbeat</span>
+                  <span>Last Seen</span>
                   <strong>{selectedDevice.isLive ? 'Online' : 'Stale'}</strong>
                   <small>{selectedDeviceLastHeartbeat}</small>
                 </article>
@@ -3006,27 +4987,93 @@ export default function App() {
                 </article>
               </div>
 
+              {selectedDeviceEngagementData.length > 0 && (
+                <div className="agent-engagement-section">
+                  <article className="chart-card">
+                    <div className="chart-card-header">
+                      <div>
+                        <h3>Core App Engagement (24h Velocity)</h3>
+                        <p>Active minutes by hour for this agent's highest-cost tracked apps.</p>
+                      </div>
+                    </div>
+                    <div className="chart-frame">
+                      <ResponsiveContainer width="100%" height={280}>
+                        <LineChart
+                          data={selectedDeviceEngagementData}
+                          margin={{ top: 16, right: 18, left: 0, bottom: 2 }}
+                        >
+                          <CartesianGrid
+                            stroke="#edf2f7"
+                            strokeDasharray="3 3"
+                            vertical={false}
+                          />
+                          <XAxis
+                            dataKey="time"
+                            tickLine={false}
+                            axisLine={false}
+                            interval={2}
+                            tick={{ fill: '#7b8ba0', fontSize: 12 }}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            tick={{ fill: '#7b8ba0', fontSize: 12 }}
+                            width={52}
+                            label={{
+                              value: 'Active Minutes',
+                              angle: -90,
+                              position: 'insideLeft',
+                              fill: '#7b8ba0',
+                              fontSize: 12,
+                            }}
+                          />
+                          <Tooltip content={<HistoricalTooltip />} />
+                          <Legend content={<ChartLegend />} />
+                          {selectedDeviceEngagementSeries.map((series) => (
+                            <Line
+                              activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
+                              dataKey={series.dataKey}
+                              dot={false}
+                              key={series.dataKey}
+                              name={series.name}
+                              stroke={series.color}
+                              strokeWidth={2.4}
+                              type="monotone"
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </article>
+                </div>
+              )}
+
               <div className="detail-content">
                 <div>
-                  <h3>Tracked Software Applications</h3>
+                  <h3>Tracked Software Licenses</h3>
                   <div className="tracked-app-list">
                     {selectedDeviceApps.map((entry) => (
                       <div className="tracked-app-item" key={entry.appName}>
                         <span className="app-icon">{entry.icon}</span>
                         <div>
                           <strong>{entry.displayName}</strong>
-                          <small>
-                            {entry.shouldShowRawName && `${entry.rawName} - `}
-                            {formatRuntime(entry.totalRuntimeSeconds)} tracked,
-                            {` ${formatCurrency(entry.monthlyCost)}`} monthly cost
-                          </small>
+                          <div className="tracked-app-details">
+                            {entry.shouldShowRawName && <small>{entry.rawName}</small>}
+                            <small>
+                              {formatRuntime(entry.workedRuntimeSeconds)} worked
+                              {entry.hasAgentExtension &&
+                                `, ${formatRuntime(entry.automationWorkedSeconds)} automation`}
+                              {`, ${formatRuntime(entry.idleRuntimeSeconds)} idle`}
+                            </small>
+                            <small>{formatCurrency(entry.monthlyCost)} monthly cost</small>
+                            <small>
+                              last tracked at {formatLastTrackedInline(entry.lastSeenAt)}
+                            </small>
+                          </div>
                         </div>
                         <span
-                          className={`status-badge ${
-                            entry.status === 'Active'
-                              ? 'status-active'
-                              : 'status-reclaimable'
-                          }`}
+                          className={`status-badge ${getStatusBadgeClass(entry.status)}`}
+                          title={entry.reclaimReason}
                         >
                           {entry.status}
                         </span>
@@ -3041,7 +5088,7 @@ export default function App() {
                 </div>
 
                 <div>
-                  <h3>Live Tracking Information</h3>
+                  <h3>Agent Tracking Information</h3>
                   <div className="tracking-feed">
                     <div>
                       <span>Machine user</span>
@@ -3052,57 +5099,50 @@ export default function App() {
                       <strong>{selectedDevice.isLive ? 'Streaming' : 'Disconnected'}</strong>
                     </div>
                     <div>
-                      <span>Active expensive licenses</span>
-                      <strong>{selectedDevice.activeLicenseCount}</strong>
+                      <span>Active Licenses</span>
+                      <strong>{selectedDeviceTrackingMetrics.activeLicenseCount}</strong>
+                    </div>
+                    <div>
+                      <span>Total Licenses</span>
+                      <strong>{selectedDeviceTrackingMetrics.totalLicenseCount}</strong>
                     </div>
                     <div>
                       <span>Total license cost</span>
-                      <strong>{formatCurrency(selectedDevice.totalLicenseCost)}</strong>
+                      <strong>
+                        {formatCurrency(selectedDeviceTrackingMetrics.totalLicenseCost)}
+                      </strong>
                     </div>
-                    {selectedDevice.id === 'laptop-dx01' && usageByUrl.length > 0 && (
-                      <div>
-                        <span>Tracked URLs</span>
-                        <strong>{usageByUrl.length}</strong>
-                      </div>
-                    )}
-                    {selectedDevice.id === 'laptop-dx01' && usageByExtension.length > 0 && (
-                      <div>
-                        <span>AI extensions detected</span>
-                        <strong>
-                          {aggregates.activeExtensions}/{aggregates.totalExtensions}
-                        </strong>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
 
               {selectedDevice.id === 'laptop-dx01' && usageByExtension.length > 0 && (
                 <div className="detail-extension-section">
-                  <h3>Nested AI Extension Attribution</h3>
+                  <h3>AI Licenses</h3>
                   <div className="tracked-app-list">
                     {usageByExtension.map((extension) => (
                       <div className="tracked-app-item" key={extension.name}>
                         <span className="app-icon extension-icon">{extension.icon}</span>
                         <div>
                           <strong>{extension.name}</strong>
-                          <small>
-                            {formatRuntime(extension.totalRuntimeSeconds)} tracked under{' '}
-                            {extension.parentApps.join(', ')} -{' '}
-                            {formatCurrency(extension.unitMonthlyCost)} monthly cost - selected model{' '}
-                            {extension.activeModelNames.length > 0
-                              ? extension.activeModelNames.join(', ')
-                              : extension.aiModels.length > 0
-                              ? extension.aiModels.join(', ')
-                              : 'unknown'}
-                          </small>
+                          <div className="tracked-app-details">
+                            <small>parent apps: {extension.parentApps.join(', ')}</small>
+                            <small>
+                              {formatRuntime(extension.workedRuntimeSeconds)} worked,
+                              {` ${formatRuntime(extension.automationWorkedSeconds)} automation, `}
+                              {formatRuntime(extension.idleRuntimeSeconds)} idle
+                            </small>
+                            <small>
+                              {formatCurrency(extension.unitMonthlyCost)} monthly cost
+                            </small>
+                            <small>
+                              last tracked at {formatLastTrackedInline(extension.lastSeenAt)}
+                            </small>
+                          </div>
                         </div>
                         <span
-                          className={`status-badge ${
-                            extension.status === 'Detected'
-                              ? 'status-active'
-                              : 'status-neutral'
-                          }`}
+                          className={`status-badge ${getStatusBadgeClass(extension.status)}`}
+                          title={extension.reclaimReason}
                         >
                           {extension.status}
                         </span>
