@@ -27,9 +27,158 @@ const DEFAULT_RECLAIM_POLICY = {
   worked_threshold_seconds: RECLAIMABLE_THRESHOLD_SECONDS,
   minimum_observation_seconds: 7 * 24 * 60 * 60,
   token_threshold: 0,
+  idle_threshold_seconds: 120,
 };
 
+const LICENSE_POLICY_OPTIONS = [
+  {
+    name: 'Finance baseline',
+    evaluationWindowDays: 30,
+    evaluationWindowValue: 30,
+    evaluationWindowUnit: 'Days',
+    workedThresholdHours: 1,
+  },
+  {
+    name: 'Design suite',
+    evaluationWindowDays: 45,
+    evaluationWindowValue: 45,
+    evaluationWindowUnit: 'Days',
+    workedThresholdHours: 4,
+  },
+  {
+    name: 'Engineering tools',
+    evaluationWindowDays: 30,
+    evaluationWindowValue: 30,
+    evaluationWindowUnit: 'Days',
+    workedThresholdHours: 8,
+  },
+  {
+    name: 'Request based reclaim',
+    evaluationWindowDays: 14,
+    evaluationWindowValue: 14,
+    evaluationWindowUnit: 'Days',
+    workedThresholdHours: 1,
+  },
+];
+
+const DEFAULT_LICENSE_APP_FORM = {
+  appName: '',
+  processName: '',
+  url: '',
+  monthlyCost: '',
+  owner: '',
+  ownerEmail: '',
+  appType: 'Application',
+  parentApp: '',
+  subscriptionType: '',
+};
+
+const DEFAULT_ONBOARD_APP_LICENSE_FORM = {
+  appId: '',
+  policyName: LICENSE_POLICY_OPTIONS[0].name,
+};
+
+const DEFAULT_POLICY_REGISTRATION_FORM = {
+  name: '',
+  evaluationWindowValue: '30',
+  evaluationWindowUnit: 'Days',
+  workedThresholdHours: '1',
+  minimumObservationDays: '7',
+};
+
+function getConfigKey(value) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+function buildReclaimPolicy(policy, { includeTokenThreshold = false } = {}) {
+  return {
+    evaluation_window_seconds: getEvaluationWindowSeconds(policy),
+    worked_threshold_seconds: getPolicyWindowSeconds(
+      policy.workedThresholdHours,
+      policy
+    ),
+    minimum_observation_seconds: getPolicyWindowSeconds(
+      policy.minimumObservationDays || 7,
+      policy
+    ),
+    idle_threshold_seconds: Number(
+      policy.idleThresholdSeconds ??
+        policy.idle_threshold_seconds ??
+        DEFAULT_RECLAIM_POLICY.idle_threshold_seconds
+    ),
+    ...(includeTokenThreshold ? { token_threshold: 0 } : {}),
+  };
+}
+
+function getEvaluationWindowSeconds(policy) {
+  const value = policy.evaluationWindowValue ?? policy.evaluationWindowDays ?? 30;
+  return getPolicyWindowSeconds(value, policy);
+}
+
+function getPolicyWindowSeconds(value, policy) {
+  if (policy.evaluationWindowUnit === 'Minutes') {
+    return value * 60;
+  }
+
+  if (policy.evaluationWindowUnit === 'Hours') {
+    return value * 60 * 60;
+  }
+
+  return value * 24 * 60 * 60;
+}
+
+function formatEvaluationWindow(policy) {
+  const value = policy.evaluationWindowValue ?? policy.evaluationWindowDays ?? 30;
+  const unit = policy.evaluationWindowUnit || 'Days';
+  return `${value} ${unit.toLowerCase()}`;
+}
+
+function formatPolicyWindowValue(value, policy) {
+  const unit = policy.evaluationWindowUnit || 'Days';
+  return `${value} ${unit.toLowerCase()}`;
+}
+
+function buildAgentDeploymentConfig({ pcName, user, licensedApps, inventoryApps = [] }) {
+  const applicationItems = licensedApps.filter((app) => app.appType === 'Application');
+  const extensionItems = licensedApps.filter((app) => app.appType === 'Extension');
+  const webUrlItems = inventoryApps.filter((app) => app.appType === 'Web URL');
+
+  return {
+    target_pc: pcName,
+    assigned_user: user || 'Unassigned',
+    generated_at: new Date().toISOString(),
+    licensed_apps: applicationItems.map((app) => ({
+      name: app.processName || app.appName,
+      type: 'application',
+      subscriptionType: app.subscriptionType || app.appName,
+      license_cost: app.monthlyCost,
+      reclaim_policy: buildReclaimPolicy(app.policy),
+      extensions: extensionItems
+        .filter(
+          (extension) =>
+            extension.parentApp === app.appName ||
+            extension.parentApp === app.processName
+        )
+        .map((extension) => ({
+          name: extension.processName || extension.appName,
+          type: 'agent',
+          subscriptionType: extension.subscriptionType,
+          license_cost: extension.monthlyCost,
+          dummy_model: '',
+          model_signatures: [],
+          identifiers: [],
+          match_all: [],
+          reclaim_policy: buildReclaimPolicy(extension.policy, {
+            includeTokenThreshold: true,
+          }),
+        })),
+    })),
+    tracked_urls: webUrlItems.map((app) => app.url),
+  };
+}
+
 const sentEmailSummaryWindowKeys = new Set();
+const pendingEmailSummaryWindowKeys = new Set();
 
 const pricingMap = {
   Adobe: 150,
@@ -585,9 +734,19 @@ const reportHistory = [
 ];
 
 function formatRuntime(seconds) {
-  const hours = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+  const totalSeconds = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+  if (hours > 0) {
+    return remainingSeconds > 0
+      ? `${hours}h ${mins}m ${remainingSeconds}s`
+      : `${hours}h ${mins}m`;
+  }
+  if (mins > 0) {
+    return remainingSeconds > 0 ? `${mins}m ${remainingSeconds}s` : `${mins}m`;
+  }
+  return `${remainingSeconds}s`;
 }
 
 function getTimestampMs(value) {
@@ -982,27 +1141,72 @@ function formatNumber(value) {
   }).format(value);
 }
 
+function escapeEmailHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function createEmailSummarySubject(windowEndsAt) {
-  return `AgentOps evaluation summary - ${formatDateTime(windowEndsAt)}`;
+  return `Software License Management summary - ${formatDateTime(windowEndsAt)}`;
 }
 
 function createEmailSummaryHtml({
   evaluationWindow,
   aggregates,
-  unifiedSummary,
-  topSavingsOpportunities,
   usageByApp,
-  usageByExtension,
+  extensionAttributionRows,
+  currentPcName,
+  config,
+  latestTelemetry,
 }) {
-  const topApps = (usageByApp || [])
-    .filter((entry) => entry.savingsOpportunity > 0)
-    .sort((first, second) => second.savingsOpportunity - first.savingsOpportunity)
-    .slice(0, 5);
+  const appRows = usageByApp || [];
+  const extensionRows = extensionAttributionRows || [];
+  const updatedAt = latestTelemetry?.timestamp
+    ? new Date(latestTelemetry.timestamp).toLocaleTimeString()
+    : null;
+  const cellStyle =
+    'padding:10px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;vertical-align:top;';
+  const headerStyle =
+    'padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;vertical-align:top;';
+  const costImpactStyle = `${cellStyle}color:#c52535;font-weight:800;`;
+  const getSavingsStyle = (value) =>
+    `${cellStyle}color:${value > 0 ? '#178f52' : '#74849a'};font-weight:800;`;
+  const statusBadgeHtml = (status) => {
+    const statusStyles = {
+      Active: 'background:#e8f8f0;color:#11633c;',
+      Observing: 'background:#fff7df;color:#8a5a00;',
+      Reclaimable: 'background:#fff0f1;color:#be2634;',
+    };
 
-  const topExtensions = (usageByExtension || [])
-    .filter((entry) => entry.status === 'Reclaimable')
-    .sort((first, second) => second.monthlyCost - first.monthlyCost)
-    .slice(0, 3);
+    return `<span style="display:inline-block;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:800;line-height:1;background:#edf2f7;color:#53667e;${
+      statusStyles[status] || ''
+    }">${escapeEmailHtml(status)}</span>`;
+  };
+
+  const runtimeBreakdownHtml = (entry) => {
+    const isAgentEntry = entry.appType === 'agent' || entry.type === 'agent';
+    const showAutomationWork = isAgentEntry || entry.hasAgentExtension;
+
+    return [
+      `<strong>${formatRuntime(entry.totalRuntimeSeconds)}</strong>`,
+      !isAgentEntry ? `Manual Work ${formatRuntime(getManualWorkedSeconds(entry))}` : null,
+      showAutomationWork
+        ? `Automation Work ${formatRuntime(entry.automationWorkedSeconds || 0)}`
+        : null,
+      `Idle ${formatRuntime(entry.idleRuntimeSeconds || 0)}`,
+    ]
+      .filter(Boolean)
+      .map((line, index) =>
+        index === 0
+          ? `<div>${line}</div>`
+          : `<div style="color:#64748b;margin-top:4px;">${line}</div>`
+      )
+      .join('');
+  };
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1011,49 +1215,41 @@ function createEmailSummaryHtml({
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Software License Management Summary</title>
 </head>
-<body style="margin:0;padding:0;font-family:Inter,system-ui,sans-serif;background:#eef2f7;color:#0f172a;">
+<body style="margin:0;padding:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:#f3f7fb;color:#0f172a;">
   <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
     <tr>
-      <td align="center" style="padding:32px 16px;">
-        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 30px 80px rgba(15,23,42,0.12);">
+      <td align="center" style="padding:36px 16px;">
+        <table width="820" cellpadding="0" cellspacing="0" role="presentation" style="width:820px;max-width:100%;background:#ffffff;border-radius:22px;overflow:hidden;border:1px solid #dbe5f0;box-shadow:0 24px 70px rgba(15,23,42,0.12);">
           <tr>
-            <td style="padding:32px 32px 24px; background:linear-gradient(135deg,#2563eb,#9333ea);color:#ffffff;">
-              <h1 style="margin:0;font-size:24px;letter-spacing:-0.02em;">Software License Management Summary</h1>
-              <p style="margin:12px 0 0;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.82);">Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} — ${formatDateTime(evaluationWindow.endsAt)}</p>
+            <td style="padding:34px 34px 30px;background:#101828;color:#ffffff;">
+              <p style="margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:0.14em;color:#8fd3ff;">License intelligence</p>
+              <h1 style="margin:0;font-size:28px;line-height:1.25;letter-spacing:0;">Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} to ${formatDateTime(evaluationWindow.endsAt)}</h1>
+              <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:#d7e3f0;">Software Licsence Management - live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.</p>
             </td>
           </tr>
           <tr>
-            <td style="padding:28px 32px 0;">
+            <td style="padding:28px 34px 0;background:#ffffff;">
               <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
                 <tr>
-                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
-                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Managed spend</p>
-                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(unifiedSummary.totalManagedSpend)}</h2>
-                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Desktop, AI, and cloud spend under review.</p>
+                  <td style="width:33.33%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:16px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Total Monthly Software Spend</p>
+                      <h2 style="margin:0;font-size:20px;color:#c52535;">${formatCurrency(aggregates.totalMonthlySoftwareSpend)}</h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">App license cost + AI license cost</p>
                     </div>
                   </td>
-                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
-                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Identified waste</p>
-                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(unifiedSummary.combinedMonthlyWaste)}</h2>
-                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Idle assets and reclaimable license costs.</p>
+                  <td style="width:33.33%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:16px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Identified monthly savings</p>
+                      <h2 style="margin:0;font-size:20px;color:#178f52;">${formatCurrency(aggregates.totalMonthlySavings)}</h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Reclaimable app cost + AI license cost</p>
                     </div>
                   </td>
-                </tr>
-                <tr>
-                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
-                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Software spend</p>
-                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(aggregates.trackedMonthlyCost)}</h2>
-                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Total tracked app license cost.</p>
-                    </div>
-                  </td>
-                  <td style="width:50%;padding:0 8px 16px;vertical-align:top;">
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px;">
-                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Software savings</p>
-                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${formatCurrency(aggregates.totalSavings)}</h2>
-                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">Potential monthly savings opportunity.</p>
+                  <td style="width:33.33%;padding:0 8px 16px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:16px;padding:20px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Reclaimable Licenses</p>
+                      <h2 style="margin:0;font-size:20px;color:#0f172a;">${aggregates.totalReclaimableLicenses} <span style="font-size:13px;color:#64748b;font-weight:600;">from ${aggregates.totalLicenses} total licenses</span></h2>
+                      <p style="margin:10px 0 0;font-size:13px;color:#475569;">${aggregates.reclaimableSeats} App Licenses + ${aggregates.reclaimableAgentExtensions} AI Licenses</p>
                     </div>
                   </td>
                 </tr>
@@ -1061,110 +1257,129 @@ function createEmailSummaryHtml({
             </td>
           </tr>
           <tr>
-            <td style="padding:0 32px 24px;">
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
-                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Software License Management highlights</h3>
-                <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
-                  <tr>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Active app licenses</td>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.activeSeats}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Total app licenses</td>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.totalSeats}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Reclaimable licenses</td>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.reclaimableSeats}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:12px 0;">License efficiency score</td>
-                    <td style="padding:12px 0;text-align:right;">${aggregates.licenseEfficiencyScore}%</td>
-                  </tr>
-                </table>
-              </div>
+            <td style="padding:2px 34px 24px;background:#ffffff;">
+              <h2 style="margin:0 0 8px;font-size:20px;color:#0f172a;">App Licenses</h2>
+              <p style="margin:0 0 12px;font-size:13px;line-height:1.6;color:#475569;">Reclaimable licenses are evaluated per app policy after the minimum observation period. Idle grace periods are configured inside each reclaim policy.</p>
+              <p style="margin:0 0 16px;font-size:13px;color:#475569;">${evaluationWindow.sampleCount} telemetry samples${updatedAt ? ` &middot; Updated ${updatedAt}` : ''}</p>
+              <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;margin-bottom:18px;">
+                <tr>
+                  <td style="width:33.33%;padding:0 8px 0 0;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:14px;padding:16px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Overall monthly cost</p>
+                      <h3 style="margin:0;font-size:18px;color:#0f172a;">${formatCurrency(aggregates.trackedMonthlyCost)}</h3>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:0 8px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:14px;padding:16px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Identified monthly savings</p>
+                      <h3 style="margin:0;font-size:18px;color:#0f172a;">${formatCurrency(aggregates.totalSavings)}</h3>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:0 0 0 8px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:14px;padding:16px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">App Licenses</p>
+                      <h3 style="margin:0;font-size:18px;color:#0f172a;">${aggregates.totalSeats}</h3>
+                      <p style="margin:8px 0 0;font-size:13px;color:#475569;">${aggregates.activeSeats} Actively Working</p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
           <tr>
-            <td style="padding:0 32px 24px;">
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
-                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">AI license summary</h3>
-                <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
-                  <tr>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">AI agent licenses</td>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.totalAgentExtensions}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">Active AI licenses</td>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${aggregates.activeExtensions}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;">AI monthly cost</td>
-                    <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;text-align:right;">${formatCurrency(aggregates.totalExtensionMonthlyCost)}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:12px 0;">Reclaimable AI savings</td>
-                    <td style="padding:12px 0;text-align:right;">${formatCurrency(aggregates.totalExtensionSavings)}</td>
-                  </tr>
-                </table>
-              </div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:0 32px 24px;">
-              <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Top savings opportunities</h3>
-              <ul style="margin:0;padding:0 0 0 18px;color:#475569;font-size:13px;line-height:1.65;">
-                ${topSavingsOpportunities
-                  .slice(0, 3)
-                  .map(
-                    (item) =>
-                      `<li style="margin-bottom:8px;"><strong>${item.action}</strong> — ${item.detail} (${formatCurrency(item.impact)}/mo)</li>`
-                  )
-                  .join('')}
-              </ul>
-            </td>
-          </tr>
-          ${topApps.length > 0 ? `
-          <tr>
-            <td style="padding:0 32px 24px;">
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
-                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Top reclaimable software licenses</h3>
-                <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
+            <td style="padding:0 34px 26px;background:#ffffff;">
+              <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">App Licenses</h3>
+              <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;border:1px solid #dbe5f0;border-radius:14px;overflow:hidden;">
                   <tr style="background:#eef2ff;">
-                    <th align="left" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;">App</th>
-                    <th align="right" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;">Cost</th>
-                    <th align="right" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;text-transform:uppercase;color:#475569;">Savings</th>
+                    <th align="left" style="${headerStyle}">PC Name</th>
+                    <th align="left" style="${headerStyle}">App Identity</th>
+                    <th align="left" style="${headerStyle}">Status</th>
+                    <th align="right" style="${headerStyle}">Tracked Runtime</th>
+                    <th align="right" style="${headerStyle}">Utilization</th>
+                    <th align="right" style="${headerStyle}">Cost Impact</th>
+                    <th align="right" style="${headerStyle}">Savings Opportunity</th>
                   </tr>
-                  ${topApps
+                  ${appRows
                     .map(
                       (entry) =>
                         `<tr>
-                          <td style="padding:10px 10px 10px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;">${entry.displayName}</td>
-                          <td align="right" style="padding:10px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;">${formatCurrency(entry.monthlyCost)}</td>
-                          <td align="right" style="padding:10px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;">${formatCurrency(entry.savingsOpportunity)}</td>
+                          <td style="${cellStyle}">${escapeEmailHtml(entry.pcName)}</td>
+                          <td style="${cellStyle}"><strong>${escapeEmailHtml(entry.displayName)}</strong>${entry.shouldShowRawName ? `<br /><span style="color:#64748b;">${escapeEmailHtml(entry.rawName)}</span>` : ''}</td>
+                          <td style="${cellStyle}">${statusBadgeHtml(entry.status)}</td>
+                          <td align="right" style="${cellStyle}">${runtimeBreakdownHtml(entry)}</td>
+                          <td align="right" style="${cellStyle}">${entry.utilizationPercent}%</td>
+                          <td align="right" style="${costImpactStyle}">-${formatCurrency(entry.monthlyCost)}</td>
+                          <td align="right" style="${getSavingsStyle(entry.savingsOpportunity)}">${entry.savingsOpportunity > 0 ? `+${formatCurrency(entry.savingsOpportunity)}` : formatCurrency(0)}</td>
                         </tr>`
                     )
                     .join('')}
-                </table>
-              </div>
+              </table>
             </td>
-          </tr>` : ''}
-          ${topExtensions.length > 0 ? `
+          </tr>
           <tr>
-            <td style="padding:0 32px 32px;">
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:24px;">
-                <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Top reclaimable AI licenses</h3>
-                <ul style="margin:0;padding:0 0 0 18px;color:#475569;font-size:13px;line-height:1.65;">
-                  ${topExtensions
-                    .map(
-                      (extension) =>
-                        `<li style="margin-bottom:10px;"><strong>${extension.name}</strong> — ${formatCurrency(extension.monthlyCost)} /mo, ${extension.detectedSeatCount} seats</li>`
-                    )
-                    .join('')}
-                </ul>
-              </div>
+            <td style="padding:0 34px 34px;background:#ffffff;">
+              <h2 style="margin:8px 0 8px;font-size:20px;color:#0f172a;">AI Licenses</h2>
+              <p style="margin:0 0 16px;font-size:13px;line-height:1.6;color:#475569;">Nested extension usage is counted only while the host application is focused.</p>
+              <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;margin-bottom:18px;">
+                <tr>
+                  <td style="width:33.33%;padding:0 8px 0 0;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:14px;padding:16px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Overall monthly cost</p>
+                      <h3 style="margin:0;font-size:18px;color:#0f172a;">${formatCurrency(aggregates.totalExtensionMonthlyCost)}</h3>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:0 8px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:14px;padding:16px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">Identified monthly savings</p>
+                      <h3 style="margin:0;font-size:18px;color:#0f172a;">${formatCurrency(aggregates.totalExtensionSavings)}</h3>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:0 0 0 8px;vertical-align:top;">
+                    <div style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:14px;padding:16px;">
+                      <p style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#64748b;letter-spacing:0.08em;">AI Agent Licenses</p>
+                      <h3 style="margin:0;font-size:18px;color:#0f172a;">${aggregates.totalAgentExtensions}</h3>
+                      <p style="margin:8px 0 0;font-size:13px;color:#475569;">${aggregates.activeExtensions} Actively Working</p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+              <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;border:1px solid #dbe5f0;border-radius:14px;overflow:hidden;">
+                <tr style="background:#eef2ff;">
+                  <th align="left" style="${headerStyle}">PC Name</th>
+                  <th align="left" style="${headerStyle}">Extension Identity</th>
+                  <th align="left" style="${headerStyle}">Status</th>
+                  <th align="right" style="${headerStyle}">Tracked Runtime</th>
+                  <th align="right" style="${headerStyle}">Utilization</th>
+                  <th align="right" style="${headerStyle}">Cost Impact</th>
+                  <th align="right" style="${headerStyle}">Savings Opportunity</th>
+                </tr>
+                ${extensionRows
+                  .map((extension) => {
+                    const pcNames =
+                      extension.detectedPcNames.length > 0
+                        ? extension.detectedPcNames.join(', ')
+                        : currentPcName;
+                    const savings =
+                      extension.status === 'Reclaimable'
+                        ? `+${formatCurrency(extension.monthlyCost)}`
+                        : formatCurrency(0);
+                    const savingsValue =
+                      extension.status === 'Reclaimable' ? extension.monthlyCost : 0;
+
+                    return `<tr>
+                      <td style="${cellStyle}">${escapeEmailHtml(pcNames)}</td>
+                      <td style="${cellStyle}"><strong>${escapeEmailHtml(extension.name)}</strong><br /><span style="color:#64748b;">${escapeEmailHtml(extension.subscriptionType)}</span><br /><span style="color:#64748b;">${escapeEmailHtml(extension.parentApps.join(', '))}</span></td>
+                      <td style="${cellStyle}">${statusBadgeHtml(extension.status)}</td>
+                      <td align="right" style="${cellStyle}">${runtimeBreakdownHtml(extension)}</td>
+                      <td align="right" style="${cellStyle}">${extension.utilizationPercent}%</td>
+                      <td align="right" style="${costImpactStyle}">-${formatCurrency(extension.monthlyCost)}</td>
+                      <td align="right" style="${getSavingsStyle(savingsValue)}">${savings}</td>
+                    </tr>`;
+                  })
+                  .join('')}
+              </table>
             </td>
-          </tr>` : ''}
+          </tr>
         </table>
       </td>
     </tr>
@@ -1176,51 +1391,111 @@ function createEmailSummaryHtml({
 function createEmailSummaryBody({
   evaluationWindow,
   aggregates,
-  cloudSummary,
-  unifiedSummary,
-  topSavingsOpportunities,
   usageByApp,
-  usageByExtension,
+  extensionAttributionRows,
+  currentPcName,
+  config,
+  latestTelemetry,
 }) {
+  const updatedAt = latestTelemetry?.timestamp
+    ? new Date(latestTelemetry.timestamp).toLocaleTimeString()
+    : null;
+  const runtimeBreakdownText = (entry) => {
+    const isAgentEntry = entry.appType === 'agent' || entry.type === 'agent';
+    const showAutomationWork = isAgentEntry || entry.hasAgentExtension;
+    return [
+      formatRuntime(entry.totalRuntimeSeconds),
+      !isAgentEntry ? `Manual Work ${formatRuntime(getManualWorkedSeconds(entry))}` : null,
+      showAutomationWork
+        ? `Automation Work ${formatRuntime(entry.automationWorkedSeconds || 0)}`
+        : null,
+      `Idle ${formatRuntime(entry.idleRuntimeSeconds || 0)}`,
+    ]
+      .filter(Boolean)
+      .join('; ');
+  };
+
   const baseLines = [
+    'License intelligence',
+    '',
+    'Software Licsence Management',
+    'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
+    '',
+    `Total Monthly Software Spend: ${formatCurrency(aggregates.totalMonthlySoftwareSpend)}`,
+    'App license cost + AI license cost',
+    `Identified Monthly Savings: ${formatCurrency(aggregates.totalMonthlySavings)}`,
+    'Reclaimable app cost + AI license cost',
+    `Reclaimable Licenses: ${aggregates.totalReclaimableLicenses} from ${aggregates.totalLicenses} total licenses`,
+    `${aggregates.reclaimableSeats} App Licenses + ${aggregates.reclaimableAgentExtensions} AI Licenses`,
+    '',
+    'App Licenses',
+    'Reclaimable licenses are evaluated per app policy after the minimum observation period. Idle grace periods are configured inside each reclaim policy.',
     `Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} - ${formatDateTime(
       evaluationWindow.endsAt
     )}`,
+    `${evaluationWindow.sampleCount} telemetry samples${updatedAt ? `, Updated ${updatedAt}` : ''}`,
     '',
-    `Total managed spend: ${formatCurrency(unifiedSummary.totalManagedSpend)}`,
-    `Combined monthly waste: ${formatCurrency(unifiedSummary.combinedMonthlyWaste)}`,
-    `Optimization score: ${unifiedSummary.optimizationScore}%`,
+    `Overall monthly cost: ${formatCurrency(aggregates.trackedMonthlyCost)}`,
+    `Identified monthly savings: ${formatCurrency(aggregates.totalSavings)}`,
+    `App licenses: ${aggregates.totalSeats}`,
+    `Actively working: ${aggregates.activeSeats}`,
     '',
-    `Tracked monthly software spend: ${formatCurrency(aggregates.trackedMonthlyCost)}`,
-    `Identified software savings: ${formatCurrency(aggregates.totalSavings)}`,
-    `Active app licenses: ${aggregates.activeSeats}/${aggregates.totalSeats}`,
-    `Reclaimable licenses: ${aggregates.reclaimableSeats}`,
-    '',
-    `AI agent licenses: ${aggregates.totalAgentExtensions}`,
-    `Active AI licenses: ${aggregates.activeExtensions}`,
-    `AI monthly cost: ${formatCurrency(aggregates.totalExtensionMonthlyCost)}`,
-    `Reclaimable AI savings: ${formatCurrency(aggregates.totalExtensionSavings)}`,
-    '',
-    `Cloud monthly burn: ${formatCurrency(cloudSummary.monthlyBurn)}`,
-    `Zombie waste: ${formatCurrency(cloudSummary.zombieWaste)}`,
-    `Right-sizing savings potential: ${formatCurrency(cloudSummary.rightSizingSavings)}`,
-    '',
-    'Top savings opportunities:',
+    'App Licenses:',
   ];
 
-  const opportunityLines = topSavingsOpportunities.slice(0, 3).map(
-    (item, index) =>
-      `${index + 1}. ${item.action} — ${item.detail} (${formatCurrency(item.impact)}/mo)`
+  const appLines = [...(usageByApp || [])]
+    .map(
+      (entry) =>
+        `${entry.pcName} | ${entry.displayName} | ${entry.status} | ${runtimeBreakdownText(
+          entry
+        )} | ${entry.utilizationPercent}% utilization | -${formatCurrency(
+          entry.monthlyCost
+        )} cost | ${
+          entry.savingsOpportunity > 0 ? `+${formatCurrency(entry.savingsOpportunity)}` : formatCurrency(0)
+        } savings`
   );
 
-  const textBody = [...baseLines, ...opportunityLines, '', 'Delivered by AgentOps UI'].join('\n');
+  const extensionLines = [...(extensionAttributionRows || [])].map((extension) => {
+    const pcNames =
+      extension.detectedPcNames.length > 0
+        ? extension.detectedPcNames.join(', ')
+        : currentPcName;
+    const savings =
+      extension.status === 'Reclaimable'
+        ? `+${formatCurrency(extension.monthlyCost)}`
+        : formatCurrency(0);
+
+    return `${pcNames} | ${extension.name} | ${extension.subscriptionType} | ${extension.parentApps.join(
+      ', '
+    )} | ${extension.status} | ${runtimeBreakdownText(extension)} | ${
+      extension.utilizationPercent
+    }% utilization | -${formatCurrency(extension.monthlyCost)} cost | ${savings} savings`;
+  });
+
+  const textBody = [
+    ...baseLines,
+    ...appLines,
+    '',
+    'AI Licenses',
+    'Nested extension usage is counted only while the host application is focused.',
+    '',
+    `Overall monthly cost: ${formatCurrency(aggregates.totalExtensionMonthlyCost)}`,
+    `Identified monthly savings: ${formatCurrency(aggregates.totalExtensionSavings)}`,
+    `AI Agent Licenses: ${aggregates.totalAgentExtensions}`,
+    `Actively working: ${aggregates.activeExtensions}`,
+    '',
+    ...extensionLines,
+    '',
+    'Delivered by AgentOps UI',
+  ].join('\n');
   const htmlBody = createEmailSummaryHtml({
     evaluationWindow,
     aggregates,
-    unifiedSummary,
-    topSavingsOpportunities,
     usageByApp,
-    usageByExtension,
+    extensionAttributionRows,
+    currentPcName,
+    config,
+    latestTelemetry,
   });
 
   return { text: textBody, html: htmlBody };
@@ -1902,8 +2177,23 @@ export default function App() {
   const [deployForm, setDeployForm] = useState({
     pcName: '',
     user: '',
-    policy: 'Finance baseline',
   });
+  const [lastDeploymentConfig, setLastDeploymentConfig] = useState(null);
+  const [licensePolicies, setLicensePolicies] = useState(LICENSE_POLICY_OPTIONS);
+  const [policyRegistrationForm, setPolicyRegistrationForm] = useState(
+    DEFAULT_POLICY_REGISTRATION_FORM
+  );
+  const [policyRegistrationStatus, setPolicyRegistrationStatus] = useState('');
+  const [editingPolicyName, setEditingPolicyName] = useState('');
+  const [licensedApps, setLicensedApps] = useState([]);
+  const [onboardedAppLicenses, setOnboardedAppLicenses] = useState([]);
+  const [onboardAppLicenseForm, setOnboardAppLicenseForm] = useState(
+    DEFAULT_ONBOARD_APP_LICENSE_FORM
+  );
+  const [editingOnboardedLicenseId, setEditingOnboardedLicenseId] = useState('');
+  const [licenseAppForm, setLicenseAppForm] = useState(DEFAULT_LICENSE_APP_FORM);
+  const [editingInventoryAppId, setEditingInventoryAppId] = useState('');
+  const [licenseOnboardingStatus, setLicenseOnboardingStatus] = useState('');
   const [selectedDeviceId, setSelectedDeviceId] = useState('laptop-dx01');
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [isNavCollapsedAfterSelect, setIsNavCollapsedAfterSelect] = useState(false);
@@ -2008,6 +2298,7 @@ export default function App() {
     });
 
     return {
+      history: windowHistory,
       startsAt: windowStartsAt,
       endsAt: windowEndsAt,
       sampleCount: windowHistory.length,
@@ -2028,14 +2319,11 @@ export default function App() {
       return usageMap;
     }
 
-    if (evaluationWindow.isAgentReported) {
-      (latestTelemetry?.usage || []).forEach((entry) => {
-        usageMap.set(entry.app_name, readUsageCounters(entry));
-      });
-      return usageMap;
-    }
+    const history = evaluationWindow.isAgentReported
+      ? evaluationWindow.history
+      : telemetryWindow.history;
 
-    telemetryWindow.history.forEach((payload) => {
+    history.forEach((payload) => {
       (payload.usage || []).forEach((entry) => {
         const existing = usageMap.get(entry.app_name) || createUsageCounters();
         const next = readUsageCounters(entry);
@@ -2062,8 +2350,8 @@ export default function App() {
     return usageMap;
   }, [
     evaluationWindow.hasExpiredReportedWindow,
+    evaluationWindow.history,
     evaluationWindow.isAgentReported,
-    latestTelemetry,
     telemetryWindow,
   ]);
 
@@ -2640,11 +2928,16 @@ export default function App() {
     const activeExpensiveApps = usageByApp.filter(
       (entry) => entry.status === 'Active' && entry.monthlyCost >= 20
     );
-    const activeExpensiveLicenses = activeExpensiveApps.length;
+    const onboardedLicenseCost = onboardedAppLicenses.reduce(
+      (sum, app) => sum + app.monthlyCost,
+      0
+    );
+    const activeExpensiveLicenses =
+      activeExpensiveApps.length + onboardedAppLicenses.length;
     const activeExpensiveLicenseCost = activeExpensiveApps.reduce(
       (sum, entry) => sum + entry.monthlyCost,
       0
-    );
+    ) + onboardedLicenseCost;
 
     return mockFleetDevices.map((device, index) => ({
       ...device,
@@ -2654,10 +2947,15 @@ export default function App() {
         index === 0 ? activeExpensiveLicenseCost : device.totalLicenseCost,
       trackedApps:
         index === 0
-          ? usageByApp.filter((entry) => entry.monthlyCost > 0).map((entry) => entry.appName)
+          ? [
+              ...usageByApp
+                .filter((entry) => entry.monthlyCost > 0)
+                .map((entry) => entry.appName),
+              ...onboardedAppLicenses.map((app) => app.appName),
+            ]
           : device.trackedApps,
     }));
-  }, [usageByApp]);
+  }, [onboardedAppLicenses, usageByApp]);
 
   const selectedDevice = useMemo(
     () =>
@@ -2670,7 +2968,27 @@ export default function App() {
     if (!selectedDevice) return [];
 
     if (selectedDevice.id === 'laptop-dx01') {
-      return usageByApp.filter((entry) => entry.monthlyCost > 0);
+      const onboardedAppEntries = onboardedAppLicenses.map((app) => ({
+        appName: app.appName,
+        displayName: app.appName,
+        processName: app.appName,
+        icon: getAppIcon(app.appName),
+        hasAgentExtension: false,
+        status: 'Onboarded',
+        totalRuntimeSeconds: 0,
+        workedRuntimeSeconds: 0,
+        automationWorkedSeconds: 0,
+        idleRuntimeSeconds: 0,
+        utilizationPercent: 0,
+        monthlyCost: app.monthlyCost,
+        policyName: app.policy.name,
+        source: 'onboarded-license',
+      }));
+
+      return [
+        ...usageByApp.filter((entry) => entry.monthlyCost > 0),
+        ...onboardedAppEntries,
+      ];
     }
 
     return selectedDevice.trackedApps.map((appName, index) => {
@@ -2703,7 +3021,7 @@ export default function App() {
         monthlyCost,
       };
     });
-  }, [config, costOverrides, selectedDevice, usageByApp]);
+  }, [config, costOverrides, onboardedAppLicenses, selectedDevice, usageByApp]);
 
   const selectedDeviceEngagementSeries = useMemo(
     () =>
@@ -2870,6 +3188,35 @@ export default function App() {
       totalDevices: fleetDevices.length,
     };
   }, [fleetDevices]);
+
+  const onboardedLicenseSummary = useMemo(
+    () => ({
+      count: onboardedAppLicenses.length,
+      monthlyCost: onboardedAppLicenses.reduce(
+        (sum, app) => sum + app.monthlyCost,
+        0
+      ),
+    }),
+    [onboardedAppLicenses]
+  );
+
+  const registeredPolicySummary = useMemo(
+    () => ({
+      count: licensePolicies.length,
+      fastestDecisionHours: Math.min(
+        ...licensePolicies.map((policy) => getEvaluationWindowSeconds(policy) / 3600)
+      ),
+    }),
+    [licensePolicies]
+  );
+
+  const enterpriseParentAppOptions = useMemo(
+    () =>
+      licensedApps
+        .filter((app) => app.appType === 'Application')
+        .map((app) => app.appName),
+    [licensedApps]
+  );
 
   const cloudRegionOptions = useMemo(
     () => Array.from(new Set(cloudInventory.map((resource) => resource.region))).sort(),
@@ -3073,6 +3420,11 @@ export default function App() {
   );
 
   const emailRecipient = appConfig?.email?.trim();
+  const isEmailSummaryReady =
+    Boolean(config) &&
+    Boolean(latestTelemetry) &&
+    evaluationWindow.sampleCount > 0 &&
+    (sortedUsageByApp.length > 0 || extensionAttributionRows.length > 0);
 
   const sendEmailSummary = useCallback(async () => {
     if (!emailRecipient) {
@@ -3083,59 +3435,76 @@ export default function App() {
       throw new Error('Evaluation window is not ready yet.');
     }
 
+    if (!isEmailSummaryReady) {
+      throw new Error('Software License Management data is still loading.');
+    }
+
     const windowKey = `${evaluationWindow.startsAt}-${evaluationWindow.endsAt}`;
     if (emailSummaryWindowKey === windowKey || sentEmailSummaryWindowKeys.has(windowKey)) {
       setEmailSummaryStatus('Evaluation summary already sent for this window.');
       return;
     }
 
-    setEmailSummaryStatus(`Sending evaluation summary to ${emailRecipient}...`);
-    const subject = createEmailSummarySubject(evaluationWindow.endsAt);
-    const { text, html } = createEmailSummaryBody({
-      evaluationWindow,
-      aggregates,
-      cloudSummary,
-      unifiedSummary,
-      topSavingsOpportunities,
-      usageByApp,
-      usageByExtension,
-    });
-
-    const response = await fetch('http://localhost:3000/send-email-summary', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        recipient: emailRecipient,
-        subject,
-        body: text,
-        html,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Email service failed: ${errorText || response.statusText}`);
+    if (pendingEmailSummaryWindowKeys.has(windowKey)) {
+      setEmailSummaryStatus('Evaluation summary is already being sent for this window.');
+      return;
     }
 
-    sentEmailSummaryWindowKeys.add(windowKey);
-    setEmailSummaryStatus(`Evaluation summary sent to ${emailRecipient}.`);
-    setEmailSummaryWindowKey(windowKey);
+    pendingEmailSummaryWindowKeys.add(windowKey);
+
+    try {
+      setEmailSummaryStatus(`Sending evaluation summary to ${emailRecipient}...`);
+      const subject = createEmailSummarySubject(evaluationWindow.endsAt);
+      const { text, html } = createEmailSummaryBody({
+        evaluationWindow,
+        aggregates,
+        usageByApp: sortedUsageByApp,
+        extensionAttributionRows,
+        currentPcName,
+        config,
+        latestTelemetry,
+      });
+
+      const response = await fetch('http://localhost:3000/send-email-summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          recipient: emailRecipient,
+          subject,
+          body: text,
+          html,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Email service failed: ${errorText || response.statusText}`);
+      }
+
+      sentEmailSummaryWindowKeys.add(windowKey);
+      setEmailSummaryStatus('');
+      setEmailSummaryWindowKey(windowKey);
+    } catch (err) {
+      pendingEmailSummaryWindowKeys.delete(windowKey);
+      throw err;
+    }
   }, [
     emailRecipient,
     evaluationWindow,
+    isEmailSummaryReady,
     emailSummaryWindowKey,
     aggregates,
-    cloudSummary,
-    unifiedSummary,
-    topSavingsOpportunities,
-    usageByApp,
-    usageByExtension,
+    sortedUsageByApp,
+    extensionAttributionRows,
+    currentPcName,
+    config,
+    latestTelemetry,
   ]);
 
   useEffect(() => {
-    if (!emailRecipient || !evaluationWindow.endsAt) {
+    if (!emailRecipient || !evaluationWindow.endsAt || !isEmailSummaryReady) {
       return undefined;
     }
 
@@ -3165,13 +3534,14 @@ export default function App() {
     emailRecipient,
     evaluationWindow.endsAt,
     evaluationWindow.startsAt,
+    isEmailSummaryReady,
     emailSummaryWindowKey,
     aggregates,
-    cloudSummary,
-    unifiedSummary,
-    topSavingsOpportunities,
-    usageByApp,
-    usageByExtension,
+    sortedUsageByApp,
+    extensionAttributionRows,
+    currentPcName,
+    config,
+    latestTelemetry,
     sendEmailSummary,
   ]);
 
@@ -3226,27 +3596,451 @@ export default function App() {
     }));
   };
 
+  const handleLicenseAppInputChange = (event) => {
+    const { name, value } = event.target;
+    setLicenseAppForm((currentForm) => ({
+      ...currentForm,
+      [name]: value,
+      ...(name === 'appType' && value === 'Application'
+        ? {
+            parentApp: '',
+            subscriptionType: '',
+          }
+        : {}),
+      ...(name === 'appType' && value === 'Web URL'
+        ? {
+            appName: '',
+            processName: '',
+            parentApp: '',
+            subscriptionType: '',
+          }
+        : {}),
+    }));
+  };
+
+  const handleOnboardAppLicenseInputChange = (event) => {
+    const { name, value } = event.target;
+    setOnboardAppLicenseForm((currentForm) => ({
+      ...currentForm,
+      [name]: value,
+    }));
+  };
+
+  const handlePolicyRegistrationInputChange = (event) => {
+    const { name, value } = event.target;
+    setPolicyRegistrationForm((currentForm) => ({
+      ...currentForm,
+      [name]: value,
+    }));
+  };
+
   const handleDeployAgent = (event) => {
     event.preventDefault();
 
     const normalizedPcName = deployForm.pcName.trim().toUpperCase();
+    const assignedUser = deployForm.user.trim();
     if (!normalizedPcName) {
       setDeployTarget('Enter a PC name to prepare deployment.');
       return;
     }
 
+    if (onboardedAppLicenses.length === 0) {
+      setDeployTarget('Onboard at least one app license before deployment.');
+      return;
+    }
+
+    const deploymentConfig = buildAgentDeploymentConfig({
+      pcName: normalizedPcName,
+      user: assignedUser,
+      licensedApps: onboardedAppLicenses,
+      inventoryApps: licensedApps,
+    });
+
     setIsDeployingAgent(true);
-    setDeployTarget(`Preparing deployment for ${normalizedPcName}`);
+    setDeployTarget(
+      `Preparing deployment for ${normalizedPcName} with ${onboardedAppLicenses.length} app licenses`
+    );
 
     window.setTimeout(() => {
       setIsDeployingAgent(false);
-      setDeployTarget(`Deployment package queued for ${normalizedPcName}`);
+      setLastDeploymentConfig(deploymentConfig);
+      setDeployTarget(
+        `Deployment config queued for ${normalizedPcName} with ${onboardedAppLicenses.length} app licenses`
+      );
       setDeployForm((currentForm) => ({
         ...currentForm,
         pcName: '',
         user: '',
       }));
     }, 1600);
+  };
+
+  const handleRegisterPolicy = (event) => {
+    event.preventDefault();
+
+    const policyName = policyRegistrationForm.name.trim();
+    const evaluationWindowValue = Number(policyRegistrationForm.evaluationWindowValue);
+    const evaluationWindowUnit = policyRegistrationForm.evaluationWindowUnit;
+    const workedThresholdHours = Number(policyRegistrationForm.workedThresholdHours);
+    const minimumObservationDays = Number(policyRegistrationForm.minimumObservationDays);
+
+    if (!policyName) {
+      setPolicyRegistrationStatus('Enter a policy name to register.');
+      return;
+    }
+
+    if (
+      !Number.isFinite(evaluationWindowValue) ||
+      evaluationWindowValue < 0.1 ||
+      !Number.isFinite(workedThresholdHours) ||
+      workedThresholdHours < 0.1 ||
+      !Number.isFinite(minimumObservationDays) ||
+      minimumObservationDays < 0.1
+    ) {
+      setPolicyRegistrationStatus('Policy timing values must be at least 0.1.');
+      return;
+    }
+
+    const nextPolicy = {
+      name: policyName,
+      evaluationWindowValue,
+      evaluationWindowUnit,
+      evaluationWindowDays:
+        evaluationWindowUnit === 'Days'
+          ? evaluationWindowValue
+          : evaluationWindowValue / 24,
+      workedThresholdHours,
+      minimumObservationDays,
+    };
+
+    const normalizedPolicyName = policyName.toLowerCase();
+    const normalizedEditingPolicyName = editingPolicyName.toLowerCase();
+    const existingPolicyIndex = licensePolicies.findIndex(
+      (policy) => policy.name.toLowerCase() === normalizedPolicyName
+    );
+    const editingPolicyIndex = licensePolicies.findIndex(
+      (policy) => policy.name.toLowerCase() === normalizedEditingPolicyName
+    );
+
+    if (
+      editingPolicyName &&
+      existingPolicyIndex !== -1 &&
+      existingPolicyIndex !== editingPolicyIndex
+    ) {
+      setPolicyRegistrationStatus(`${policyName} policy already exists.`);
+      return;
+    }
+
+    setLicensePolicies((currentPolicies) => {
+      const existingIndex = currentPolicies.findIndex(
+        (policy) => policy.name.toLowerCase() === normalizedPolicyName
+      );
+      const editingIndex = currentPolicies.findIndex(
+        (policy) => policy.name.toLowerCase() === normalizedEditingPolicyName
+      );
+
+      if (editingPolicyName && editingIndex !== -1) {
+        return currentPolicies.map((policy, index) =>
+          index === editingIndex ? nextPolicy : policy
+        );
+      }
+
+      if (existingIndex === -1) {
+        return [...currentPolicies, nextPolicy];
+      }
+
+      return currentPolicies.map((policy, index) =>
+        index === existingIndex ? { ...policy, ...nextPolicy } : policy
+      );
+    });
+    setOnboardedAppLicenses((currentApps) =>
+      currentApps.map((app) =>
+        app.policy.name.toLowerCase() ===
+        (editingPolicyName || nextPolicy.name).toLowerCase()
+          ? { ...app, policy: nextPolicy }
+          : app
+      )
+    );
+    setOnboardAppLicenseForm((currentForm) => ({
+      ...currentForm,
+      policyName: nextPolicy.name,
+    }));
+    setPolicyRegistrationStatus(
+      editingPolicyName
+        ? `${nextPolicy.name} policy updated.`
+        : `${nextPolicy.name} policy registered.`
+    );
+    setPolicyRegistrationForm(DEFAULT_POLICY_REGISTRATION_FORM);
+    setEditingPolicyName('');
+  };
+
+  const handleEditPolicy = (policy) => {
+    setEditingPolicyName(policy.name);
+    setPolicyRegistrationForm({
+      name: policy.name,
+      evaluationWindowValue: String(
+        policy.evaluationWindowValue ?? policy.evaluationWindowDays ?? 30
+      ),
+      evaluationWindowUnit: policy.evaluationWindowUnit || 'Days',
+      workedThresholdHours: String(policy.workedThresholdHours),
+      minimumObservationDays: String(policy.minimumObservationDays || 7),
+    });
+    setPolicyRegistrationStatus(`Editing ${policy.name} policy.`);
+  };
+
+  const handleRemovePolicy = (policyName) => {
+    if (licensePolicies.length <= 1) {
+      setPolicyRegistrationStatus('Keep at least one policy registered.');
+      return;
+    }
+
+    const remainingPolicies = licensePolicies.filter(
+      (policy) => policy.name !== policyName
+    );
+    const fallbackPolicy = remainingPolicies[0];
+
+    setLicensePolicies(remainingPolicies);
+    setOnboardedAppLicenses((currentApps) =>
+      currentApps.map((app) =>
+        app.policy.name === policyName ? { ...app, policy: fallbackPolicy } : app
+      )
+    );
+    setOnboardAppLicenseForm((currentForm) => ({
+      ...currentForm,
+      policyName:
+        currentForm.policyName === policyName
+          ? fallbackPolicy.name
+          : currentForm.policyName,
+    }));
+
+    if (editingPolicyName === policyName) {
+      setPolicyRegistrationForm(DEFAULT_POLICY_REGISTRATION_FORM);
+      setEditingPolicyName('');
+    }
+
+    setPolicyRegistrationStatus(`${policyName} policy removed.`);
+  };
+
+  const handleAddEnterpriseInventoryItem = (event) => {
+    event.preventDefault();
+
+    const appName = licenseAppForm.appName.trim();
+    const processName = licenseAppForm.processName.trim();
+    const url = licenseAppForm.url.trim();
+    const monthlyCost = Number(licenseAppForm.monthlyCost);
+    const owner = licenseAppForm.owner.trim();
+    const ownerEmail = licenseAppForm.ownerEmail.trim();
+    const appType = licenseAppForm.appType;
+    const parentApp = licenseAppForm.parentApp.trim();
+    const subscriptionType = licenseAppForm.subscriptionType.trim();
+
+    if (appType === 'Web URL' && !url) {
+      setLicenseOnboardingStatus('Enter the web URL.');
+      return;
+    }
+
+    if (appType !== 'Web URL' && !appName) {
+      setLicenseOnboardingStatus('Enter an app name to add inventory.');
+      return;
+    }
+
+    if (appType !== 'Web URL' && !processName) {
+      setLicenseOnboardingStatus('Enter the app process name.');
+      return;
+    }
+
+    if (!Number.isFinite(monthlyCost) || monthlyCost <= 0) {
+      setLicenseOnboardingStatus('Enter a valid monthly license cost.');
+      return;
+    }
+
+    if (!owner) {
+      setLicenseOnboardingStatus('Enter the app owner name.');
+      return;
+    }
+
+    if (!ownerEmail) {
+      setLicenseOnboardingStatus('Enter the owner email.');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+      setLicenseOnboardingStatus('Enter a valid owner email.');
+      return;
+    }
+
+    if (appType === 'Extension' && !parentApp) {
+      setLicenseOnboardingStatus('Choose a parent app for this extension.');
+      return;
+    }
+
+    if (appType === 'Extension' && !subscriptionType) {
+      setLicenseOnboardingStatus('Enter the extension subscription type.');
+      return;
+    }
+
+    const nextApp = {
+      id: `${appType}-${appType === 'Web URL' ? url : appName}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-'),
+      appName: appType === 'Web URL' ? url : appName,
+      processName,
+      url,
+      monthlyCost,
+      owner,
+      ownerEmail,
+      appType,
+      parentApp,
+      subscriptionType,
+      onboardedAt: new Date().toISOString(),
+    };
+
+    if (
+      editingInventoryAppId &&
+      editingInventoryAppId !== nextApp.id &&
+      licensedApps.some((app) => app.id === nextApp.id)
+    ) {
+      setLicenseOnboardingStatus(`${appName} ${appType.toLowerCase()} already exists.`);
+      return;
+    }
+
+    setLicensedApps((currentApps) => {
+      const existingIndex = currentApps.findIndex(
+        (app) => app.id === (editingInventoryAppId || nextApp.id)
+      );
+
+      if (existingIndex === -1) {
+        return [...currentApps, nextApp];
+      }
+
+      return currentApps.map((app, index) =>
+        index === existingIndex ? { ...app, ...nextApp } : app
+      );
+    });
+    setOnboardedAppLicenses((currentLicenses) =>
+      currentLicenses.map((app) =>
+        app.id === editingInventoryAppId || app.id === nextApp.id
+          ? { ...app, ...nextApp, policy: app.policy }
+          : app
+      )
+    );
+    setLicenseOnboardingStatus(
+      `${appName} ${appType.toLowerCase()} ${
+        editingInventoryAppId ? 'updated in' : 'added to'
+      } Enterprise Apps Inventory.`
+    );
+    setLicenseAppForm(DEFAULT_LICENSE_APP_FORM);
+    setEditingInventoryAppId('');
+  };
+
+  const handleOnboardAppLicense = (event) => {
+    event.preventDefault();
+
+    const inventoryItem = licensedApps.find(
+      (app) => app.id === onboardAppLicenseForm.appId
+    );
+    const selectedPolicy =
+      licensePolicies.find(
+        (policy) => policy.name === onboardAppLicenseForm.policyName
+      ) || licensePolicies[0];
+
+    if (!inventoryItem) {
+      setLicenseOnboardingStatus('Choose an app from Enterprise Apps Inventory.');
+      return;
+    }
+
+    const nextLicense = {
+      ...inventoryItem,
+      policy: selectedPolicy,
+      onboardedAt: new Date().toISOString(),
+    };
+
+    setOnboardedAppLicenses((currentLicenses) => {
+      const existingIndex = currentLicenses.findIndex(
+        (app) => app.id === (editingOnboardedLicenseId || inventoryItem.id)
+      );
+
+      if (existingIndex === -1) {
+        return [...currentLicenses, nextLicense];
+      }
+
+      return currentLicenses.map((app, index) =>
+        index === existingIndex ? nextLicense : app
+      );
+    });
+    setLicenseOnboardingStatus(
+      `${inventoryItem.appName} license ${
+        editingOnboardedLicenseId ? 'updated' : 'onboarded'
+      } with ${selectedPolicy.name} policy.`
+    );
+    setOnboardAppLicenseForm({
+      ...DEFAULT_ONBOARD_APP_LICENSE_FORM,
+      policyName: selectedPolicy.name,
+    });
+    setEditingOnboardedLicenseId('');
+  };
+
+  const handleEditOnboardedLicense = (app) => {
+    setEditingOnboardedLicenseId(app.id);
+    setOnboardAppLicenseForm({
+      appId: app.id,
+      policyName: app.policy.name,
+    });
+    setLicenseOnboardingStatus(`Editing ${app.appName} license.`);
+  };
+
+  const handleRemoveOnboardedLicense = (appId) => {
+    const removedLicense = onboardedAppLicenses.find((app) => app.id === appId);
+    setOnboardedAppLicenses((currentLicenses) =>
+      currentLicenses.filter((app) => app.id !== appId)
+    );
+
+    if (editingOnboardedLicenseId === appId) {
+      setEditingOnboardedLicenseId('');
+      setOnboardAppLicenseForm(DEFAULT_ONBOARD_APP_LICENSE_FORM);
+    }
+
+    setLicenseOnboardingStatus(
+      `${removedLicense?.appName || 'App'} license removed.`
+    );
+  };
+
+  const handleEditInventoryApp = (app) => {
+    setEditingInventoryAppId(app.id);
+    setLicenseAppForm({
+      appName: app.appType === 'Web URL' ? '' : app.appName,
+      processName: app.processName,
+      url: app.url || '',
+      monthlyCost: String(app.monthlyCost),
+      owner: app.owner,
+      ownerEmail: app.ownerEmail,
+      appType: app.appType,
+      parentApp: app.parentApp || '',
+      subscriptionType: app.subscriptionType || '',
+    });
+    setLicenseOnboardingStatus(`Editing ${app.appName} inventory item.`);
+  };
+
+  const handleRemoveInventoryApp = (appId) => {
+    const removedApp = licensedApps.find((app) => app.id === appId);
+    setLicensedApps((currentApps) => currentApps.filter((app) => app.id !== appId));
+    setOnboardedAppLicenses((currentLicenses) =>
+      currentLicenses.filter((app) => app.id !== appId)
+    );
+
+    if (editingInventoryAppId === appId) {
+      setEditingInventoryAppId('');
+      setLicenseAppForm(DEFAULT_LICENSE_APP_FORM);
+    }
+
+    if (editingOnboardedLicenseId === appId) {
+      setEditingOnboardedLicenseId('');
+      setOnboardAppLicenseForm(DEFAULT_ONBOARD_APP_LICENSE_FORM);
+    }
+
+    setLicenseOnboardingStatus(
+      `${removedApp?.appName || 'Inventory item'} removed from inventory.`
+    );
   };
 
   const handleExploreDevice = (deviceId) => {
@@ -3322,6 +4116,9 @@ export default function App() {
           if (!data || !data.timestamp) {
             return currentHistory;
           }
+          if (data.telemetry_pending) {
+            return currentHistory;
+          }
 
           const alreadyStored = currentHistory.some(
             (entry) => entry.timestamp === data.timestamp
@@ -3344,6 +4141,14 @@ export default function App() {
   };
 
   const handleNavSelection = (event, nextView) => {
+    if (nextView === 'cloud-asset-management') {
+      setActiveView('unified-dashboard');
+      setShowAgentDetails(false);
+      setIsNavCollapsedAfterSelect(true);
+      event.currentTarget.blur();
+      return;
+    }
+
     setActiveView(nextView);
     setShowAgentDetails(false);
     setIsNavCollapsedAfterSelect(true);
@@ -3413,22 +4218,6 @@ export default function App() {
               <NavIcon type="agent" />
             </span>
             <span className="nav-label">Agent Management</span>
-          </button>
-          <button
-            className={
-              activeView === 'cloud-asset-management'
-                ? 'nav-link active'
-                : 'nav-link'
-            }
-            type="button"
-            onClick={(event) =>
-              handleNavSelection(event, 'cloud-asset-management')
-            }
-          >
-            <span className="nav-glyph">
-              <NavIcon type="cloud" />
-            </span>
-            <span className="nav-label">Cloud Asset Management</span>
           </button>
           <button
             className={
@@ -3953,8 +4742,8 @@ export default function App() {
                 <h2>App Licenses</h2>
                 <p>
                   Reclaimable licenses are evaluated per app policy after the
-                  minimum observation period. The idle grace period is{' '}
-                  {formatRuntime(config?.idle_threshold_seconds ?? 120)}.
+                  minimum observation period. Idle grace periods are configured
+                  inside each reclaim policy.
                 </p>
                 <div className="tracking-window-meta">
                   <span>
@@ -4763,6 +5552,22 @@ export default function App() {
               <strong>{formatCurrency(fleetSummary.totalLicenseCost)}</strong>
               <small>{fleetSummary.activeLicenses} expensive licenses detected</small>
             </article>
+            <article className="summary-card summary-card-success">
+              <span>Onboarded Apps</span>
+              <strong>{onboardedLicenseSummary.count}</strong>
+              <small>
+                {formatCurrency(onboardedLicenseSummary.monthlyCost)} monthly policy scope
+              </small>
+            </article>
+            <article className="summary-card">
+              <span>Registered Policies</span>
+              <strong>{registeredPolicySummary.count}</strong>
+              <small>
+                Fastest reclaim decision in {formatRuntime(
+                  registeredPolicySummary.fastestDecisionHours * 60 * 60
+                )}
+              </small>
+            </article>
           </section>
 
           <section className="panel deploy-panel">
@@ -4775,7 +5580,10 @@ export default function App() {
                 <span className="deployment-status">{deployTarget}</span>
               )}
             </div>
-            <form className="deploy-form" onSubmit={handleDeployAgent}>
+            <form
+              className="deploy-form endpoint-deploy-form"
+              onSubmit={handleDeployAgent}
+            >
               <label>
                 <span>PC Name</span>
                 <input
@@ -4796,18 +5604,6 @@ export default function App() {
                   onChange={handleDeployInputChange}
                 />
               </label>
-              <label>
-                <span>Policy</span>
-                <select
-                  name="policy"
-                  value={deployForm.policy}
-                  onChange={handleDeployInputChange}
-                >
-                  <option>Finance baseline</option>
-                  <option>Design suite</option>
-                  <option>Engineering tools</option>
-                </select>
-              </label>
               <button
                 className="deploy-agent-button"
                 disabled={isDeployingAgent}
@@ -4826,6 +5622,455 @@ export default function App() {
                 )}
               </button>
             </form>
+            {lastDeploymentConfig && (
+              <div className="agent-config-preview">
+                <div className="agent-config-preview-header">
+                  <div>
+                    <h3>Queued Agent Config</h3>
+                    <p>
+                      {lastDeploymentConfig.target_pc} receives{' '}
+                      {lastDeploymentConfig.licensed_apps.length} licensed app
+                      {lastDeploymentConfig.licensed_apps.length === 1
+                        ? ''
+                        : 's'}.
+                    </p>
+                  </div>
+                  <span>{lastDeploymentConfig.assigned_user}</span>
+                </div>
+                <pre>
+                  {JSON.stringify(lastDeploymentConfig, null, 2)}
+                </pre>
+              </div>
+            )}
+          </section>
+
+          <section className="panel license-onboarding-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Onboard App License</h2>
+                <p>Select an inventory app and attach the reclaim policy that will be sent with the agent config.</p>
+              </div>
+              {licenseOnboardingStatus && (
+                <span className="deployment-status">{licenseOnboardingStatus}</span>
+              )}
+            </div>
+            <form
+              className="deploy-form app-license-onboarding-form"
+              onSubmit={handleOnboardAppLicense}
+            >
+              <label>
+                <span>App Name</span>
+                <select
+                  name="appId"
+                  value={onboardAppLicenseForm.appId}
+                  onChange={handleOnboardAppLicenseInputChange}
+                >
+                  <option value="">Select inventory app</option>
+                  {licensedApps
+                    .filter((app) => app.appType !== 'Web URL')
+                    .map((app) => (
+                    <option key={app.id} value={app.id}>
+                      {app.appName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Policy</span>
+                <select
+                  name="policyName"
+                  value={onboardAppLicenseForm.policyName}
+                  onChange={handleOnboardAppLicenseInputChange}
+                >
+                  {licensePolicies.map((policy) => (
+                    <option key={policy.name}>{policy.name}</option>
+                  ))}
+                </select>
+              </label>
+              <button className="deploy-agent-button" type="submit">
+                <span className="action-symbol">+</span>
+                {editingOnboardedLicenseId ? 'Save License' : 'Onboard License'}
+              </button>
+            </form>
+
+            {onboardedAppLicenses.length > 0 && (
+              <div className="table-wrap onboarded-license-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Licensed App</th>
+                      <th>Type</th>
+                      <th>Monthly Cost</th>
+                      <th>Attached Policy</th>
+                      <th>Threshold</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {onboardedAppLicenses.map((app) => (
+                      <tr key={app.id}>
+                        <td>
+                          <div className="device-identity">
+                            <strong>{app.appName}</strong>
+                            <span>{app.processName}</span>
+                          </div>
+                        </td>
+                        <td>{app.appType}</td>
+                        <td>{formatCurrency(app.monthlyCost)}</td>
+                        <td>{app.policy.name}</td>
+                        <td>
+                          {formatPolicyWindowValue(
+                            app.policy.workedThresholdHours,
+                            app.policy
+                          )}{' '}
+                          in{' '}
+                          {formatEvaluationWindow(app.policy)}
+                        </td>
+                        <td>
+                          <div className="policy-actions">
+                            <button
+                              aria-label={`Edit ${app.appName} license`}
+                              className="policy-icon-button policy-icon-button-edit"
+                              title="Edit license"
+                              type="button"
+                              onClick={() => handleEditOnboardedLicense(app)}
+                            >
+                              <span aria-hidden="true">✎</span>
+                            </button>
+                            <button
+                              aria-label={`Remove ${app.appName} license`}
+                              className="policy-icon-button policy-icon-button-remove"
+                              title="Remove license"
+                              type="button"
+                              onClick={() => handleRemoveOnboardedLicense(app.id)}
+                            >
+                              <span aria-hidden="true">×</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="panel license-onboarding-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Enterprise Apps Inventory</h2>
+                <p>Add applications and AI extensions to the inventory catalog used by license onboarding.</p>
+              </div>
+            </div>
+            <form
+              className="deploy-form license-onboarding-form"
+              onSubmit={handleAddEnterpriseInventoryItem}
+            >
+              <label>
+                <span>Type</span>
+                <select
+                  name="appType"
+                  value={licenseAppForm.appType}
+                  onChange={handleLicenseAppInputChange}
+                >
+                  <option>Application</option>
+                  <option>Extension</option>
+                  <option>Web URL</option>
+                </select>
+              </label>
+              {licenseAppForm.appType === 'Web URL' ? (
+                <label>
+                  <span>URL</span>
+                  <input
+                    name="url"
+                    placeholder="google.com"
+                    type="text"
+                    value={licenseAppForm.url}
+                    onChange={handleLicenseAppInputChange}
+                  />
+                </label>
+              ) : (
+                <>
+                  <label>
+                    <span>App Name</span>
+                    <input
+                      name="appName"
+                      placeholder="GitHub Copilot"
+                      type="text"
+                      value={licenseAppForm.appName}
+                      onChange={handleLicenseAppInputChange}
+                    />
+                  </label>
+                  <label>
+                    <span>Process Name</span>
+                    <input
+                      name="processName"
+                      placeholder="code.exe"
+                      type="text"
+                      value={licenseAppForm.processName}
+                      onChange={handleLicenseAppInputChange}
+                    />
+                  </label>
+                </>
+              )}
+              <label>
+                <span>Monthly Cost</span>
+                <input
+                  min="0"
+                  name="monthlyCost"
+                  placeholder="15"
+                  step="0.01"
+                  type="number"
+                  value={licenseAppForm.monthlyCost}
+                  onChange={handleLicenseAppInputChange}
+                />
+              </label>
+              <label>
+                <span>Owner</span>
+                <input
+                  name="owner"
+                  placeholder="Farhan Dulip"
+                  type="text"
+                  value={licenseAppForm.owner}
+                  onChange={handleLicenseAppInputChange}
+                />
+              </label>
+              <label>
+                <span>Owner Email</span>
+                <input
+                  name="ownerEmail"
+                  placeholder="farhan@example.com"
+                  type="email"
+                  value={licenseAppForm.ownerEmail}
+                  onChange={handleLicenseAppInputChange}
+                />
+              </label>
+              {licenseAppForm.appType === 'Extension' && (
+                <>
+                  <label>
+                    <span>Parent App</span>
+                    <select
+                      name="parentApp"
+                      value={licenseAppForm.parentApp}
+                      onChange={handleLicenseAppInputChange}
+                    >
+                      <option value="">Select parent app</option>
+                      {enterpriseParentAppOptions.map((appName) => (
+                        <option key={appName}>{appName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Subscription</span>
+                    <input
+                      name="subscriptionType"
+                      placeholder="Copilot Business"
+                      type="text"
+                      value={licenseAppForm.subscriptionType}
+                      onChange={handleLicenseAppInputChange}
+                    />
+                  </label>
+                </>
+              )}
+              <button className="deploy-agent-button" type="submit">
+                <span className="action-symbol">+</span>
+                {editingInventoryAppId ? 'Save Inventory' : 'Add Inventory'}
+              </button>
+            </form>
+
+            {licensedApps.length > 0 && (
+              <div className="table-wrap onboarded-license-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Inventory Item</th>
+                      <th>Process</th>
+                      <th>Owner</th>
+                      <th>Email</th>
+                      <th>Type</th>
+                      <th>Parent App</th>
+                      <th>Monthly Cost</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {licensedApps.map((app) => (
+                      <tr key={app.id}>
+                        <td>
+                          <div className="device-identity">
+                            <strong>{app.appName}</strong>
+                            <span>{app.appType}</span>
+                          </div>
+                        </td>
+                        <td>{app.appType === 'Web URL' ? app.url : app.processName}</td>
+                        <td>{app.owner}</td>
+                        <td>{app.ownerEmail}</td>
+                        <td>{app.appType}</td>
+                        <td>{app.appType === 'Extension' ? app.parentApp : '-'}</td>
+                        <td>{formatCurrency(app.monthlyCost)}</td>
+                        <td>
+                          <div className="policy-actions">
+                            <button
+                              aria-label={`Edit ${app.appName} inventory item`}
+                              className="policy-icon-button policy-icon-button-edit"
+                              title="Edit inventory item"
+                              type="button"
+                              onClick={() => handleEditInventoryApp(app)}
+                            >
+                              <span aria-hidden="true">✎</span>
+                            </button>
+                            <button
+                              aria-label={`Remove ${app.appName} inventory item`}
+                              className="policy-icon-button policy-icon-button-remove"
+                              title="Remove inventory item"
+                              type="button"
+                              onClick={() => handleRemoveInventoryApp(app.id)}
+                            >
+                              <span aria-hidden="true">×</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="panel policy-registration-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Register Policy</h2>
+                <p>Create reusable reclaim policies for agent deployment and licensed app onboarding.</p>
+              </div>
+              {policyRegistrationStatus && (
+                <span className="deployment-status">{policyRegistrationStatus}</span>
+              )}
+            </div>
+            <form
+              className="deploy-form policy-registration-form"
+              onSubmit={handleRegisterPolicy}
+            >
+              <label>
+                <span>Policy Name</span>
+                <input
+                  name="name"
+                  placeholder="Executive apps"
+                  type="text"
+                  value={policyRegistrationForm.name}
+                  onChange={handlePolicyRegistrationInputChange}
+                />
+              </label>
+              <label>
+                <span>Evaluation Window</span>
+                <input
+                  min="0.1"
+                  name="evaluationWindowValue"
+                  step="0.1"
+                  type="number"
+                  value={policyRegistrationForm.evaluationWindowValue}
+                  onChange={handlePolicyRegistrationInputChange}
+                />
+              </label>
+              <label>
+                <span>Active Threshold</span>
+                <input
+                  min="0.1"
+                  name="workedThresholdHours"
+                  step="0.1"
+                  type="number"
+                  value={policyRegistrationForm.workedThresholdHours}
+                  onChange={handlePolicyRegistrationInputChange}
+                />
+              </label>
+              <label>
+                <span>Observation Window</span>
+                <input
+                  min="0.1"
+                  name="minimumObservationDays"
+                  step="0.1"
+                  type="number"
+                  value={policyRegistrationForm.minimumObservationDays}
+                  onChange={handlePolicyRegistrationInputChange}
+                />
+              </label>
+              <label>
+                <span>Window Unit</span>
+                <select
+                  name="evaluationWindowUnit"
+                  value={policyRegistrationForm.evaluationWindowUnit}
+                  onChange={handlePolicyRegistrationInputChange}
+                >
+                  <option>Days</option>
+                  <option>Hours</option>
+                  <option>Minutes</option>
+                </select>
+              </label>
+              <button className="deploy-agent-button" type="submit">
+                <span className="action-symbol">+</span>
+                {editingPolicyName ? 'Save Policy' : 'Register Policy'}
+              </button>
+            </form>
+
+            <div className="table-wrap policy-list">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Policy</th>
+                    <th>Evaluation Window</th>
+                    <th>Active Use Threshold</th>
+                    <th>Minimum Observation</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {licensePolicies.map((policy) => (
+                    <tr key={policy.name}>
+                      <td>
+                        <div className="device-identity">
+                          <strong>{policy.name}</strong>
+                          <span>Reusable reclaim policy</span>
+                        </div>
+                      </td>
+                      <td>{formatEvaluationWindow(policy)}</td>
+                      <td>
+                        {formatPolicyWindowValue(policy.workedThresholdHours, policy)}
+                      </td>
+                      <td>
+                        {formatPolicyWindowValue(
+                          policy.minimumObservationDays || 7,
+                          policy
+                        )}
+                      </td>
+                      <td>
+                        <div className="policy-actions">
+                          <button
+                            aria-label={`Edit ${policy.name} policy`}
+                            className="policy-icon-button policy-icon-button-edit"
+                            title="Edit policy"
+                            type="button"
+                            onClick={() => handleEditPolicy(policy)}
+                          >
+                            <span aria-hidden="true">✎</span>
+                          </button>
+                          <button
+                            aria-label={`Remove ${policy.name} policy`}
+                            className="policy-icon-button policy-icon-button-remove"
+                            title="Remove policy"
+                            type="button"
+                            onClick={() => handleRemovePolicy(policy.name)}
+                          >
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section className="panel fleet-management-panel">
