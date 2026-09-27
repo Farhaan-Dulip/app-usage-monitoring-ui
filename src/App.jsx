@@ -1,4 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ChatAssistant from './ChatAssistant';
+import AppNavigation from './components/AppNavigation';
+import SettingsModal from './components/SettingsModal';
+import RuntimeBreakdown from './components/RuntimeBreakdown';
+import {
+  getPortalClientId,
+  getStoredSendEvaluationEmailSetting,
+  SEND_EVALUATION_EMAIL_STORAGE_KEY,
+} from './utils/clientPreferences';
+import {
+  DEFAULT_LICENSE_APP_FORM,
+  DEFAULT_ONBOARD_APP_LICENSE_FORM,
+  DEFAULT_POLICY_REGISTRATION_FORM,
+  DEFAULT_RECLAIM_POLICY,
+  DEFAULT_USAGE_WINDOW_SECONDS,
+  LICENSE_POLICY_OPTIONS,
+  RECLAIMABLE_THRESHOLD_SECONDS,
+  TOTAL_MONTHLY_SOFTWARE_SPEND,
+} from './config/licenseDefaults';
+import {
+  reportDimensions,
+  reportHistory,
+  reportMetrics,
+  reportTemplates,
+} from './data/reportingData';
 import appCostData from './app_costs.json';
 import appConfig from './app_config.json';
 import {
@@ -19,86 +44,27 @@ import {
   YAxis,
 } from 'recharts';
 
-const RECLAIMABLE_THRESHOLD_SECONDS = 60 * 60;
-const TOTAL_MONTHLY_SOFTWARE_SPEND = 4250;
-const DEFAULT_USAGE_WINDOW_SECONDS = 60 * 60;
-const DEFAULT_RECLAIM_POLICY = {
-  evaluation_window_seconds: 30 * 24 * 60 * 60,
-  worked_threshold_seconds: RECLAIMABLE_THRESHOLD_SECONDS,
-  minimum_observation_seconds: 7 * 24 * 60 * 60,
-  token_threshold: 0,
-  idle_threshold_seconds: 120,
-};
-
-const LICENSE_POLICY_OPTIONS = [
-  {
-    name: 'Finance baseline',
-    evaluationWindowDays: 30,
-    evaluationWindowValue: 30,
-    evaluationWindowUnit: 'Days',
-    workedThresholdHours: 1,
-  },
-  {
-    name: 'Design suite',
-    evaluationWindowDays: 45,
-    evaluationWindowValue: 45,
-    evaluationWindowUnit: 'Days',
-    workedThresholdHours: 4,
-  },
-  {
-    name: 'Engineering tools',
-    evaluationWindowDays: 30,
-    evaluationWindowValue: 30,
-    evaluationWindowUnit: 'Days',
-    workedThresholdHours: 8,
-  },
-  {
-    name: 'Request based reclaim',
-    evaluationWindowDays: 14,
-    evaluationWindowValue: 14,
-    evaluationWindowUnit: 'Days',
-    workedThresholdHours: 1,
-  },
-];
-
-const DEFAULT_LICENSE_APP_FORM = {
-  appName: '',
-  processName: '',
-  url: '',
-  monthlyCost: '',
-  owner: '',
-  ownerEmail: '',
-  appType: 'Application',
-  parentApp: '',
-  subscriptionType: '',
-};
-
-const DEFAULT_ONBOARD_APP_LICENSE_FORM = {
-  appId: '',
-  policyName: LICENSE_POLICY_OPTIONS[0].name,
-};
-
-const DEFAULT_POLICY_REGISTRATION_FORM = {
-  name: '',
-  evaluationWindowValue: '30',
-  evaluationWindowUnit: 'Days',
-  workedThresholdHours: '1',
-  minimumObservationDays: '7',
-};
-
+const BACKEND_BASE_URL = 'http://localhost:3000';
+const MONITORING_AGENT_BASE_URL = 'http://localhost:3002';
 function getConfigKey(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
 
-function buildReclaimPolicy(policy, { includeTokenThreshold = false } = {}) {
+function buildReclaimPolicy(policy) {
+  return {
+    idle_threshold_seconds: Number(
+      policy.idleThresholdSeconds ??
+        policy.idle_threshold_seconds ??
+        DEFAULT_RECLAIM_POLICY.idle_threshold_seconds
+    ),
+  };
+}
+
+function buildPortalReclaimPolicy(policy, { includeTokenThreshold = false } = {}) {
   return {
     evaluation_window_seconds: getEvaluationWindowSeconds(policy),
     worked_threshold_seconds: getPolicyWindowSeconds(
       policy.workedThresholdHours,
-      policy
-    ),
-    minimum_observation_seconds: getPolicyWindowSeconds(
-      policy.minimumObservationDays || 7,
       policy
     ),
     idle_threshold_seconds: Number(
@@ -113,6 +79,10 @@ function buildReclaimPolicy(policy, { includeTokenThreshold = false } = {}) {
 function getEvaluationWindowSeconds(policy) {
   const value = policy.evaluationWindowValue ?? policy.evaluationWindowDays ?? 30;
   return getPolicyWindowSeconds(value, policy);
+}
+
+function getEvaluationWindowDays(policy) {
+  return getEvaluationWindowSeconds(policy) / (24 * 60 * 60);
 }
 
 function getPolicyWindowSeconds(value, policy) {
@@ -138,6 +108,48 @@ function formatPolicyWindowValue(value, policy) {
   return `${value} ${unit.toLowerCase()}`;
 }
 
+function getExtensionDetectionDefaults(extensionName) {
+  const normalizedName = String(extensionName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.exe$/, '');
+  if (normalizedName === 'github-copilot') {
+    return {
+      dummy_model: 'Claud Opus-4.6',
+      model_signatures: [],
+      identifiers: [],
+      match_all: ['--extensionprocess', 'github.copilot'],
+    };
+  }
+  if (normalizedName === 'codex') {
+    return {
+      canonical_name: 'codex',
+      dummy_model: 'GPT-5.2',
+      model_signatures: [
+        {
+          name: 'gpt-5.2',
+          identifiers: ['gpt-5.2'],
+          match_all: [],
+        },
+        {
+          name: 'gpt-5',
+          identifiers: ['gpt-5'],
+          match_all: [],
+        },
+      ],
+      identifiers: ['codex.exe', 'codex'],
+      match_all: [],
+    };
+  }
+
+  return {
+    dummy_model: '',
+    model_signatures: [],
+    identifiers: [],
+    match_all: [],
+  };
+}
+
 function buildAgentDeploymentConfig({ pcName, user, licensedApps, inventoryApps = [] }) {
   const applicationItems = licensedApps.filter((app) => app.appType === 'Application');
   const extensionItems = licensedApps.filter((app) => app.appType === 'Extension');
@@ -145,7 +157,7 @@ function buildAgentDeploymentConfig({ pcName, user, licensedApps, inventoryApps 
 
   return {
     target_pc: pcName,
-    assigned_user: user || 'Unassigned',
+    assigned_user: user,
     generated_at: new Date().toISOString(),
     licensed_apps: applicationItems.map((app) => ({
       name: app.processName || app.appName,
@@ -159,22 +171,115 @@ function buildAgentDeploymentConfig({ pcName, user, licensedApps, inventoryApps 
             extension.parentApp === app.appName ||
             extension.parentApp === app.processName
         )
-        .map((extension) => ({
-          name: extension.processName || extension.appName,
-          type: 'agent',
-          subscriptionType: extension.subscriptionType,
-          license_cost: extension.monthlyCost,
-          dummy_model: '',
-          model_signatures: [],
-          identifiers: [],
-          match_all: [],
-          reclaim_policy: buildReclaimPolicy(extension.policy, {
-            includeTokenThreshold: true,
-          }),
-        })),
+        .map((extension) => {
+          const extensionName = extension.processName || extension.appName;
+          const detectionDefaults = getExtensionDetectionDefaults(extensionName);
+          const configuredModelSignatures = extension.model_signatures;
+          const configuredIdentifiers = extension.identifiers;
+          const configuredMatchAll = extension.match_all || extension.matchAll;
+          const resolvedMatchAll =
+            Array.isArray(configuredMatchAll) && configuredMatchAll.length > 0
+              ? configuredMatchAll
+              : detectionDefaults.match_all;
+          const resolvedIdentifiers =
+            Array.isArray(configuredIdentifiers) && configuredIdentifiers.length > 0
+              ? configuredIdentifiers
+              : detectionDefaults.identifiers;
+          return {
+            name: detectionDefaults.canonical_name || extensionName,
+            type: 'agent',
+            subscriptionType: extension.subscriptionType,
+            license_cost: extension.monthlyCost,
+            dummy_model: extension.dummy_model || extension.dummyModel || detectionDefaults.dummy_model,
+            model_signatures:
+              Array.isArray(configuredModelSignatures) && configuredModelSignatures.length > 0
+                ? configuredModelSignatures
+                : detectionDefaults.model_signatures,
+            identifiers:
+              resolvedIdentifiers.length > 0 || resolvedMatchAll.length > 0
+                ? resolvedIdentifiers
+                : [extensionName],
+            match_all: resolvedMatchAll,
+            reclaim_policy: buildReclaimPolicy(extension.policy, {
+              includeTokenThreshold: true,
+            }),
+          };
+        }),
     })),
     tracked_urls: webUrlItems.map((app) => app.url),
   };
+}
+
+function normalizeDeploymentRecordKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getDeploymentRecordId(record) {
+  return [
+    normalizeDeploymentRecordKey(record.target_pc),
+    normalizeDeploymentRecordKey(record.type),
+    normalizeDeploymentRecordKey(record.parent_app),
+    normalizeDeploymentRecordKey(record.app_name),
+  ].join('::');
+}
+
+function buildDeploymentPolicyRecords(deploymentConfig, licensedApps = []) {
+  const targetPc = String(deploymentConfig?.target_pc || '').trim().toUpperCase();
+  const assignedUser = String(deploymentConfig?.assigned_user || '').trim();
+  const generatedAt = deploymentConfig?.generated_at || new Date().toISOString();
+  const findSourceLicense = (appName, parentApp = null) =>
+    licensedApps.find((license) => {
+      const licenseName = license.processName || license.appName;
+      if (licenseName !== appName) return false;
+      if (!parentApp) return license.appType === 'Application';
+      return license.appType === 'Extension';
+    });
+
+  return (deploymentConfig?.licensed_apps || []).flatMap((app) => {
+    const appName = String(app?.name || '').trim();
+    if (!targetPc || !appName) return [];
+    const sourceApp = findSourceLicense(appName);
+
+    const appRecord = {
+      target_pc: targetPc,
+      assigned_user: assignedUser,
+      generated_at: generatedAt,
+      app_name: appName,
+      type: app?.type || 'application',
+      parent_app: null,
+      subscriptionType: app?.subscriptionType || '',
+      license_cost: Number(app?.license_cost) || 0,
+      reclaim_policy: sourceApp?.policy
+        ? buildPortalReclaimPolicy(sourceApp.policy)
+        : app?.reclaim_policy || {},
+    };
+
+    const extensionRecords = (Array.isArray(app?.extensions) ? app.extensions : [])
+      .map((extension) => {
+        const extensionName = String(extension?.name || '').trim();
+        if (!extensionName) return null;
+        const sourceExtension = findSourceLicense(extensionName, appName);
+
+        return {
+          target_pc: targetPc,
+          assigned_user: assignedUser,
+          generated_at: generatedAt,
+          app_name: extensionName,
+          type: extension?.type || 'agent',
+          parent_app: appName,
+          subscriptionType: extension?.subscriptionType || '',
+          license_cost: Number(extension?.license_cost) || 0,
+          reclaim_policy: sourceExtension?.policy
+            ? buildPortalReclaimPolicy(sourceExtension.policy, {
+                includeTokenThreshold: true,
+              })
+            : extension?.reclaim_policy || {},
+        };
+      })
+      .filter(Boolean);
+
+    return [appRecord, ...extensionRecords];
+  });
 }
 
 const sentEmailSummaryWindowKeys = new Set();
@@ -640,99 +745,6 @@ const departmentCostAttribution = [
   },
 ];
 
-const reportTemplates = [
-  {
-    id: 'ceo-monthly',
-    name: 'CEO Monthly',
-    audience: 'Executive Summary',
-    description:
-      'High-level financial gains, managed spend, waste reduction, and savings progress for leadership.',
-    owner: 'Executive Office',
-    cadence: 'Monthly',
-    format: 'PDF',
-    accent: 'report-accent-blue',
-    includedSections: ['Financial gains', 'Waste reduction', 'Optimization score'],
-  },
-  {
-    id: 'it-audit',
-    name: 'IT Audit',
-    audience: 'Compliance',
-    description:
-      'Detailed inventory of software installations compared with active usage and reclaimable seats.',
-    owner: 'IT Operations',
-    cadence: 'Weekly',
-    format: 'Excel',
-    accent: 'report-accent-red',
-    includedSections: ['Installations', 'Usage evidence', 'License status'],
-  },
-  {
-    id: 'cloud-finops',
-    name: 'Cloud FinOps',
-    audience: 'Infrastructure',
-    description:
-      'Cloud right-sizing, provider spend, zombie resources, and cleanup opportunities by account.',
-    owner: 'Platform Engineering',
-    cadence: 'Weekly',
-    format: 'PDF + CSV',
-    accent: 'report-accent-green',
-    includedSections: ['Right-sizing', 'Orphaned assets', 'Provider spend'],
-  },
-  {
-    id: 'ai-adoption',
-    name: 'AI Adoption',
-    audience: 'Engineering',
-    description:
-      'Copilot, Cursor, and AI extension utilization with model adoption and developer efficiency signals.',
-    owner: 'Engineering Enablement',
-    cadence: 'Monthly',
-    format: 'JSON',
-    accent: 'report-accent-purple',
-    includedSections: ['AI seats', 'Selected models', 'Developer efficiency'],
-  },
-];
-
-const reportDimensions = ['User', 'Department', 'App', 'Cloud Provider'];
-const reportMetrics = ['Cost', 'Active Time', 'Waste', 'CPU %'];
-
-const reportHistory = [
-  {
-    id: 'rpt-1048',
-    name: 'CEO Monthly - April Close',
-    type: 'Executive Summary',
-    generatedAt: 'May 01, 2026 09:00',
-    version: 'v4',
-    format: 'PDF',
-    owner: 'Finance Ops',
-  },
-  {
-    id: 'rpt-1042',
-    name: 'IT Audit - License Evidence',
-    type: 'Compliance',
-    generatedAt: 'Apr 28, 2026 16:20',
-    version: 'v2',
-    format: 'XLSX',
-    owner: 'IT Operations',
-  },
-  {
-    id: 'rpt-1039',
-    name: 'Cloud FinOps - Orphan Cleanup',
-    type: 'Infrastructure',
-    generatedAt: 'Apr 25, 2026 11:45',
-    version: 'v3',
-    format: 'CSV',
-    owner: 'Platform Engineering',
-  },
-  {
-    id: 'rpt-1031',
-    name: 'AI Adoption - Engineering Rollout',
-    type: 'Engineering',
-    generatedAt: 'Apr 18, 2026 14:10',
-    version: 'v1',
-    format: 'JSON',
-    owner: 'Engineering Enablement',
-  },
-];
-
 function formatRuntime(seconds) {
   const totalSeconds = Math.max(0, Math.round(Number(seconds) || 0));
   const hours = Math.floor(totalSeconds / 3600);
@@ -828,8 +840,41 @@ function getConfigEvaluationWindowSeconds(config) {
     : DEFAULT_RECLAIM_POLICY.evaluation_window_seconds;
 }
 
-function getCurrentEvaluationWindow(windowStartsAt, windowEndsAt) {
-  const nowMs = Date.now();
+function getDeploymentEvaluationWindowConfig(
+  deploymentPolicyRecords,
+  pcName,
+  fallbackWindowSeconds
+) {
+  const pcKey = getDeploymentPolicyKey(pcName);
+  const pcRecords = deploymentPolicyRecords.filter(
+    (record) => getDeploymentPolicyKey(record.target_pc) === pcKey
+  );
+  const matchingRecords = pcRecords.length > 0 ? pcRecords : deploymentPolicyRecords;
+  const policyWindows = matchingRecords
+    .map((record) => record?.reclaim_policy?.evaluation_window_seconds)
+    .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+    .map(Number);
+  const generatedTimes = matchingRecords
+    .map((record) => getTimestampMs(record?.generated_at))
+    .filter((value) => value !== null);
+
+  return {
+    seconds:
+      policyWindows.length > 0 ? Math.min(...policyWindows) : fallbackWindowSeconds,
+    startsAt: generatedTimes.length > 0 ? Math.max(...generatedTimes) : null,
+  };
+}
+
+function getOnboardedEvaluationWindowSeconds(onboardedAppLicenses, fallbackWindowSeconds) {
+  const policyWindows = onboardedAppLicenses
+    .map((app) => getEvaluationWindowSeconds(app.policy || {}))
+    .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+    .map(Number);
+
+  return policyWindows.length > 0 ? Math.min(...policyWindows) : fallbackWindowSeconds;
+}
+
+function getCurrentEvaluationWindow(windowStartsAt, windowEndsAt, nowMs = Date.now()) {
   if (!windowStartsAt || !windowEndsAt || nowMs < windowEndsAt) {
     return { startsAt: windowStartsAt, endsAt: windowEndsAt };
   }
@@ -967,6 +1012,75 @@ function getPolicyValue(policy, key) {
   return policy?.[key] ?? DEFAULT_RECLAIM_POLICY[key];
 }
 
+function getDeploymentPolicyKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getEvaluationDecisionKey(pcName, type, name, evaluationSeriesStart) {
+  return [pcName, type, name, evaluationSeriesStart]
+    .map(getDeploymentPolicyKey)
+    .join('::');
+}
+
+function readCompletedEvaluationDecisions() {
+  return {};
+}
+
+function findDeploymentPolicyRecord(
+  deploymentPolicyRecords,
+  pcName,
+  appName,
+  { type = null, parentApp = null } = {}
+) {
+  const pcKey = getDeploymentPolicyKey(pcName);
+  const appKey = getDeploymentPolicyKey(appName);
+  const typeKey = type ? getDeploymentPolicyKey(type) : null;
+  const parentAppKeys = (Array.isArray(parentApp) ? parentApp : [parentApp])
+    .filter(Boolean)
+    .map(getDeploymentPolicyKey);
+
+  if (!appKey) return null;
+
+  const matchingRecords = deploymentPolicyRecords.filter((record) => {
+      if (getDeploymentPolicyKey(record.app_name) !== appKey) return false;
+      if (typeKey && getDeploymentPolicyKey(record.type) !== typeKey) return false;
+      if (
+        parentAppKeys.length > 0 &&
+        !parentAppKeys.includes(getDeploymentPolicyKey(record.parent_app))
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+  if (matchingRecords.length === 0) return null;
+
+  return (
+    matchingRecords.find(
+      (record) => pcKey && getDeploymentPolicyKey(record.target_pc) === pcKey
+    ) || matchingRecords[matchingRecords.length - 1]
+  );
+}
+
+function getStoredReclaimPolicy(
+  deploymentPolicyRecords,
+  pcName,
+  appName,
+  fallbackPolicy,
+  options = {}
+) {
+  return (
+    findDeploymentPolicyRecord(
+      deploymentPolicyRecords,
+      pcName,
+      appName,
+      options
+    )?.reclaim_policy ||
+    fallbackPolicy ||
+    DEFAULT_RECLAIM_POLICY
+  );
+}
+
 function getFirstSeenTimestampMs(value) {
   if (!value) return null;
   if (typeof value === 'number') {
@@ -1033,15 +1147,6 @@ function getAgentStartedTimestampMs(payload) {
   );
 }
 
-function getObservationStartedAt(config, firstSeenAt) {
-  const firstSeenMs = getFirstSeenTimestampMs(firstSeenAt);
-  const agentStartedMs = getFirstSeenTimestampMs(getAgentStartedAt(config));
-  const observationStartedMs = Math.max(firstSeenMs || 0, agentStartedMs || 0);
-
-  if (observationStartedMs <= 0) return null;
-  return new Date(observationStartedMs).toISOString();
-}
-
 function getAppType(config, appName) {
   const normalizedName = String(appName || '').toLowerCase();
   return config?.licensed_app_types?.[normalizedName] || 'application';
@@ -1058,41 +1163,25 @@ function appHasAgentExtension(config, appName) {
 
 function getReclaimDecision({
   policy,
-  firstSeenAt,
-  observationStartedAt,
   workedRuntimeSeconds,
   consumedTokens = 0,
-  nowMs = Date.now(),
+  evaluationComplete = false,
+  previousDecision = null,
 }) {
-  const firstSeenMs = getFirstSeenTimestampMs(firstSeenAt);
-  const observationStartedMs =
-    getFirstSeenTimestampMs(observationStartedAt) || firstSeenMs;
-  const minimumObservationSeconds = getPolicyValue(
-    policy,
-    'minimum_observation_seconds'
-  );
-  const requiredObservationSeconds = minimumObservationSeconds;
   const workedThresholdSeconds = getPolicyValue(policy, 'worked_threshold_seconds');
   const tokenThreshold = getPolicyValue(policy, 'token_threshold');
 
-  if (!firstSeenMs && !observationStartedMs) {
+  if (!evaluationComplete) {
+    if (previousDecision) {
+      return {
+        ...previousDecision,
+        reason: `Previous evaluation: ${previousDecision.reason}`,
+      };
+    }
     return {
-      status: 'Insufficient Data',
+      status: 'Evaluating',
       savingsEligible: false,
-      reason: 'Waiting for first-seen evidence',
-    };
-  }
-
-  const observedSeconds = Math.max(
-    0,
-    Math.floor((nowMs - observationStartedMs) / 1000)
-  );
-  if (observedSeconds < requiredObservationSeconds) {
-    const remainingSeconds = requiredObservationSeconds - observedSeconds;
-    return {
-      status: 'Observing',
-      savingsEligible: false,
-      reason: `${formatRuntime(remainingSeconds)} until policy decision`,
+      reason: 'First evaluation in progress',
     };
   }
 
@@ -1116,7 +1205,7 @@ function getReclaimDecision({
 
 function getStatusBadgeClass(status) {
   if (status === 'Active' || status === 'Detected') return 'status-active';
-  if (status === 'Observing') return 'status-observing';
+  if (status === 'Evaluating' || status === 'Observing') return 'status-observing';
   if (status === 'Reclaimable') return 'status-reclaimable';
   return 'status-neutral';
 }
@@ -1179,6 +1268,7 @@ function createEmailSummaryHtml({
     const statusStyles = {
       Active: 'background:#e8f8f0;color:#11633c;',
       Observing: 'background:#fff7df;color:#8a5a00;',
+      Evaluating: 'background:#fff7df;color:#8a5a00;',
       Reclaimable: 'background:#fff0f1;color:#be2634;',
     };
 
@@ -1259,7 +1349,7 @@ function createEmailSummaryHtml({
           <tr>
             <td style="padding:2px 34px 24px;background:#ffffff;">
               <h2 style="margin:0 0 8px;font-size:20px;color:#0f172a;">App Licenses</h2>
-              <p style="margin:0 0 12px;font-size:13px;line-height:1.6;color:#475569;">Reclaimable licenses are evaluated per app policy after the minimum observation period. Idle grace periods are configured inside each reclaim policy.</p>
+              <p style="margin:0 0 12px;font-size:13px;line-height:1.6;color:#475569;">License decisions are finalized at the end of each evaluation window. Idle grace periods are configured inside each reclaim policy.</p>
               <p style="margin:0 0 16px;font-size:13px;color:#475569;">${evaluationWindow.sampleCount} telemetry samples${updatedAt ? ` &middot; Updated ${updatedAt}` : ''}</p>
               <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;margin-bottom:18px;">
                 <tr>
@@ -1429,7 +1519,7 @@ function createEmailSummaryBody({
     `${aggregates.reclaimableSeats} App Licenses + ${aggregates.reclaimableAgentExtensions} AI Licenses`,
     '',
     'App Licenses',
-    'Reclaimable licenses are evaluated per app policy after the minimum observation period. Idle grace periods are configured inside each reclaim policy.',
+    'License decisions are finalized at the end of each evaluation window. Idle grace periods are configured inside each reclaim policy.',
     `Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} - ${formatDateTime(
       evaluationWindow.endsAt
     )}`,
@@ -1818,6 +1908,23 @@ function getConfiguredModelSubscriptionTypes(extension, modelName) {
   return ['Subscription not reported'];
 }
 
+function getSubscriptionKey(subscriptionType) {
+  return String(subscriptionType || '').trim().toLowerCase();
+}
+
+function addUniqueSubscriptionType(subscriptionTypes, subscriptionType) {
+  const subscriptionKey = getSubscriptionKey(subscriptionType);
+  if (!subscriptionKey) return;
+
+  const hasSubscriptionType = subscriptionTypes.some(
+    (existingType) => getSubscriptionKey(existingType) === subscriptionKey
+  );
+
+  if (!hasSubscriptionType) {
+    subscriptionTypes.push(subscriptionType);
+  }
+}
+
 function getDiscoveredAppMonthlyCost(appName, index, costCatalog = appCostCatalog) {
   const configuredCost = findCatalogCost(costCatalog.appCosts, appName);
   if (Number.isFinite(configuredCost)) return configuredCost;
@@ -1937,9 +2044,7 @@ function getUniqueExtensionRules(extensions = []) {
         const existingLicenseTypes =
           existing.aiModelLicenseTypes[extension.ai_model] || [];
 
-        if (!existingLicenseTypes.includes(licenseType)) {
-          existingLicenseTypes.push(licenseType);
-        }
+        addUniqueSubscriptionType(existingLicenseTypes, licenseType);
 
         existing.aiModelLicenseTypes[extension.ai_model] = existingLicenseTypes;
       }
@@ -1950,18 +2055,13 @@ function getUniqueExtensionRules(extensions = []) {
       name: extension.name,
       parentApps: extension.parent_app ? [extension.parent_app] : existing.parentApps,
     });
-    [catalogSubscriptionType, subscriptionType].forEach((candidateType) => {
-      if (candidateType && !existing.subscriptionTypes.includes(candidateType)) {
-        existing.subscriptionTypes.push(candidateType);
-      }
-    });
+    const displaySubscriptionType = subscriptionType || catalogSubscriptionType;
+    addUniqueSubscriptionType(existing.subscriptionTypes, displaySubscriptionType);
 
-    if (extension.ai_model && catalogSubscriptionType) {
+    if (extension.ai_model && !subscriptionType && catalogSubscriptionType) {
       const existingLicenseTypes =
         existing.aiModelLicenseTypes[extension.ai_model] || [];
-      if (!existingLicenseTypes.includes(catalogSubscriptionType)) {
-        existingLicenseTypes.push(catalogSubscriptionType);
-      }
+      addUniqueSubscriptionType(existingLicenseTypes, catalogSubscriptionType);
       existing.aiModelLicenseTypes[extension.ai_model] = existingLicenseTypes;
     }
 
@@ -2060,115 +2160,22 @@ function getModelLicenseBreakdown(extension) {
   );
 }
 
-function NavIcon({ type }) {
-  const icons = {
-    brand: (
-      <>
-        <path d="M5.5 7.5h5A2.5 2.5 0 0 1 13 10v1.5A2.5 2.5 0 0 1 10.5 14h-5A2.5 2.5 0 0 1 3 11.5V10a2.5 2.5 0 0 1 2.5-2.5Z" />
-        <path d="M8 7.5V4" />
-        <path d="M6.25 11h.01" />
-        <path d="M9.75 11h.01" />
-        <path d="M6.5 14v1" />
-        <path d="M9.5 14v1" />
-      </>
-    ),
-    dashboard: (
-      <>
-        <path d="M3 8a5 5 0 0 1 10 0" />
-        <path d="M4.5 12.5h7" />
-        <path d="m8 8 2.6-2.6" />
-        <path d="M8 8h.01" />
-      </>
-    ),
-    software: (
-      <>
-        <path d="M3 4.5h10v7H3z" />
-        <path d="M5 14h6" />
-        <path d="M8 11.5V14" />
-        <path d="M5 7h2" />
-        <path d="M5 9h4" />
-      </>
-    ),
-    agent: (
-      <>
-        <path d="M5 5.5h6v5H5z" />
-        <path d="M8 5.5V3.5" />
-        <path d="M4 8H2.5" />
-        <path d="M13.5 8H12" />
-        <path d="M6.5 8h.01" />
-        <path d="M9.5 8h.01" />
-        <path d="M6 12.5h4" />
-      </>
-    ),
-    cloud: (
-      <>
-        <path d="M5.5 12.5H11a3 3 0 0 0 .45-5.97A4.25 4.25 0 0 0 3.28 8.1 2.35 2.35 0 0 0 5.5 12.5Z" />
-        <path d="M6 15h4" />
-      </>
-    ),
-    reports: (
-      <>
-        <path d="M4.5 2.75h5.2L12.5 5.6v7.65h-8z" />
-        <path d="M9.5 2.9v3h2.85" />
-        <path d="M6.25 8.25h4" />
-        <path d="M6.25 10.5h2.5" />
-        <path d="M6.25 12.75h3.25" />
-      </>
-    ),
-  };
-
-  return (
-    <svg
-      aria-hidden="true"
-      className="nav-icon"
-      fill="none"
-      focusable="false"
-      viewBox="0 0 16 16"
-    >
-      <g
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-      >
-        {icons[type]}
-      </g>
-    </svg>
-  );
-}
-
-function RuntimeBreakdown({ entry }) {
-  const isAgentEntry = entry.appType === 'agent' || entry.type === 'agent';
-  const showAutomationWork =
-    isAgentEntry || entry.hasAgentExtension;
-
-  return (
-    <div className="runtime-breakdown">
-      <strong>{formatRuntime(entry.totalRuntimeSeconds)}</strong>
-      {!isAgentEntry && (
-        <span>
-          Manual Work {formatRuntime(getManualWorkedSeconds(entry))}
-        </span>
-      )}
-      {showAutomationWork && (
-        <span>
-          Automation Work {formatRuntime(entry.automationWorkedSeconds || 0)}
-        </span>
-      )}
-      <span>Idle {formatRuntime(entry.idleRuntimeSeconds || 0)}</span>
-    </div>
-  );
-}
-
 export default function App() {
+  const portalClientId = useMemo(getPortalClientId, []);
   const agentStartedAtRef = useRef(null);
+  const [hasLoadedPersistentState, setHasLoadedPersistentState] = useState(false);
   const [activeView, setActiveView] = useState('unified-dashboard');
   const [config, setConfig] = useState(null);
   const [latestTelemetry, setLatestTelemetry] = useState(null);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [error, setError] = useState('');
   const [emailSummaryStatus, setEmailSummaryStatus] = useState('');
   const [emailSummaryWindowKey, setEmailSummaryWindowKey] = useState(null);
+  const [sendEvaluationEmailEnabled, setSendEvaluationEmailEnabled] = useState(
+    getStoredSendEvaluationEmailSetting
+  );
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dispatchingDeviceId, setDispatchingDeviceId] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState('');
   const [costOverrides, setCostOverrides] = useState({});
@@ -2179,6 +2186,10 @@ export default function App() {
     user: '',
   });
   const [lastDeploymentConfig, setLastDeploymentConfig] = useState(null);
+  const [deploymentPolicyRecords, setDeploymentPolicyRecords] = useState([]);
+  const [completedEvaluationDecisions, setCompletedEvaluationDecisions] = useState(
+    readCompletedEvaluationDecisions
+  );
   const [licensePolicies, setLicensePolicies] = useState(LICENSE_POLICY_OPTIONS);
   const [policyRegistrationForm, setPolicyRegistrationForm] = useState(
     DEFAULT_POLICY_REGISTRATION_FORM
@@ -2216,6 +2227,109 @@ export default function App() {
   const [cloudProviderFilter, setCloudProviderFilter] = useState('All');
   const [cloudRegionFilter, setCloudRegionFilter] = useState('All');
 
+  useEffect(() => {
+    Promise.all([
+      fetch(`${BACKEND_BASE_URL}/api/state`, {
+        headers: { 'X-Client-Id': portalClientId },
+      }).then((response) => {
+        if (!response.ok) throw new Error(`State request failed with status ${response.status}`);
+        return response.json();
+      }),
+      fetch(`${BACKEND_BASE_URL}/api/telemetry`).then((response) => {
+        if (!response.ok) throw new Error(`History request failed with status ${response.status}`);
+        return response.json();
+      }),
+    ])
+      .then(([savedState, savedTelemetry]) => {
+        if (savedState.costOverrides) setCostOverrides(savedState.costOverrides);
+        if (savedState.config) setConfig(savedState.config);
+        if (savedState.lastDeploymentConfig) setLastDeploymentConfig(savedState.lastDeploymentConfig);
+        if (Array.isArray(savedState.deploymentPolicyRecords)) setDeploymentPolicyRecords(savedState.deploymentPolicyRecords);
+        if (savedState.completedEvaluationDecisions) setCompletedEvaluationDecisions(savedState.completedEvaluationDecisions);
+        if (Array.isArray(savedState.licensePolicies)) setLicensePolicies(savedState.licensePolicies);
+        if (Array.isArray(savedState.licensedApps)) setLicensedApps(savedState.licensedApps);
+        if (Array.isArray(savedState.onboardedAppLicenses)) setOnboardedAppLicenses(savedState.onboardedAppLicenses);
+        if (savedState.emailSummaryWindowKey) setEmailSummaryWindowKey(savedState.emailSummaryWindowKey);
+        if (typeof savedState.sendEvaluationEmailEnabled === 'boolean') {
+          setSendEvaluationEmailEnabled(savedState.sendEvaluationEmailEnabled);
+          window.localStorage.setItem(
+            SEND_EVALUATION_EMAIL_STORAGE_KEY,
+            String(savedState.sendEvaluationEmailEnabled)
+          );
+        }
+        if (savedState.selectedReportTemplateId) setSelectedReportTemplateId(savedState.selectedReportTemplateId);
+        if (Array.isArray(savedState.selectedReportDimensions)) setSelectedReportDimensions(savedState.selectedReportDimensions);
+        if (Array.isArray(savedState.selectedReportMetrics)) setSelectedReportMetrics(savedState.selectedReportMetrics);
+        if (savedState.reportFrequency) setReportFrequency(savedState.reportFrequency);
+        if (savedState.deliveryChannel) setDeliveryChannel(savedState.deliveryChannel);
+        if (savedState.historicalRange) setHistoricalRange(savedState.historicalRange);
+        if (Array.isArray(savedTelemetry)) {
+          setTelemetryHistory(savedTelemetry);
+          setLatestTelemetry(savedTelemetry.at(-1) || null);
+        }
+        setHasLoadedPersistentState(true);
+      })
+      .catch((err) => setError('Failed to load saved backend data: ' + err.message));
+  }, [portalClientId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SEND_EVALUATION_EMAIL_STORAGE_KEY,
+      String(sendEvaluationEmailEnabled)
+    );
+  }, [sendEvaluationEmailEnabled]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistentState) return;
+    const timeoutId = window.setTimeout(() => {
+      fetch(`${BACKEND_BASE_URL}/api/state`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Client-Id': portalClientId,
+        },
+        body: JSON.stringify({
+          costOverrides,
+          config,
+          lastDeploymentConfig,
+          deploymentPolicyRecords,
+          completedEvaluationDecisions,
+          licensePolicies,
+          licensedApps,
+          onboardedAppLicenses,
+          emailSummaryWindowKey,
+          sendEvaluationEmailEnabled,
+          selectedReportTemplateId,
+          selectedReportDimensions,
+          selectedReportMetrics,
+          reportFrequency,
+          deliveryChannel,
+          historicalRange,
+        }),
+      }).catch((err) => setError('Failed to save backend data: ' + err.message));
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    hasLoadedPersistentState,
+    costOverrides,
+    config,
+    lastDeploymentConfig,
+    deploymentPolicyRecords,
+    completedEvaluationDecisions,
+    licensePolicies,
+    licensedApps,
+    onboardedAppLicenses,
+    emailSummaryWindowKey,
+    sendEvaluationEmailEnabled,
+    selectedReportTemplateId,
+    selectedReportDimensions,
+    selectedReportMetrics,
+    reportFrequency,
+    deliveryChannel,
+    historicalRange,
+    portalClientId,
+  ]);
+
   const heroCopy = {
     'unified-dashboard': {
       eyebrow: 'Executive command center',
@@ -2230,10 +2344,10 @@ export default function App() {
         'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
     },
     'agent-management': {
-      eyebrow: 'Fleet management',
-      title: 'Agent Management',
+      eyebrow: 'Tracker fleet management',
+      title: 'Tracker Management',
       description:
-        'Monitor endpoint health, active expensive licenses, and redeploy agents from one operational view.',
+        'Monitor endpoint health, active expensive licenses, and redeploy trackers from one operational view.',
     },
     'cloud-asset-management': {
       eyebrow: 'Cloud FinOps',
@@ -2247,11 +2361,35 @@ export default function App() {
       description:
         'Create executive, audit, FinOps, and AI adoption reports with reusable templates, custom fields, exports, and scheduled distribution.',
     },
+    'ai-assistant': {
+      eyebrow: 'Grounded license intelligence',
+      title: 'AI Assistant',
+      description:
+        'Ask natural-language questions about license availability, completed decisions, utilization, and savings opportunities.',
+    },
   }[activeView];
+
+  const currentPcName = useMemo(
+    () => getTelemetryPcName(latestTelemetry),
+    [latestTelemetry]
+  );
 
   const effectiveUsageWindowSeconds =
     config?.usage_window_seconds || DEFAULT_USAGE_WINDOW_SECONDS;
-  const effectiveEvaluationWindowSeconds = getConfigEvaluationWindowSeconds(config);
+  const fallbackEvaluationWindowSeconds = getOnboardedEvaluationWindowSeconds(
+    onboardedAppLicenses,
+    DEFAULT_RECLAIM_POLICY.evaluation_window_seconds
+  );
+  const effectiveEvaluationWindow = useMemo(
+    () =>
+      getDeploymentEvaluationWindowConfig(
+        deploymentPolicyRecords,
+        currentPcName,
+        fallbackEvaluationWindowSeconds
+      ),
+    [currentPcName, deploymentPolicyRecords, fallbackEvaluationWindowSeconds]
+  );
+  const effectiveEvaluationWindowSeconds = effectiveEvaluationWindow.seconds;
 
   const telemetryWindow = useMemo(() => {
     const latestTimestampMs = getTelemetryTimestampMs(latestTelemetry);
@@ -2277,17 +2415,27 @@ export default function App() {
     };
   }, [effectiveUsageWindowSeconds, latestTelemetry, telemetryHistory]);
 
+  const evaluationSeriesStartsAt = useMemo(() => {
+    if (effectiveEvaluationWindow.startsAt) return effectiveEvaluationWindow.startsAt;
+    const firstTelemetryTimestamp = telemetryHistory
+      .map(getTelemetryTimestampMs)
+      .filter((value) => value !== null)
+      .sort((first, second) => first - second)[0];
+    return firstTelemetryTimestamp || telemetryWindow.endsAt;
+  }, [
+    effectiveEvaluationWindow.startsAt,
+    telemetryHistory,
+    telemetryWindow.endsAt,
+  ]);
+
   const evaluationWindow = useMemo(() => {
-    const agentWindow = getTelemetryEvaluationWindowMs(latestTelemetry);
-    const reportedWindowEndsAt = agentWindow?.endsAt || telemetryWindow.endsAt;
-    const reportedWindowStartsAt =
-      agentWindow?.startsAt ||
-      reportedWindowEndsAt - effectiveEvaluationWindowSeconds * 1000;
-    const currentWindow = agentWindow
-      ? getCurrentEvaluationWindow(reportedWindowStartsAt, reportedWindowEndsAt)
-      : { startsAt: reportedWindowStartsAt, endsAt: reportedWindowEndsAt };
-    const windowStartsAt = currentWindow.startsAt;
-    const windowEndsAt = currentWindow.endsAt;
+    const baseWindow = getCurrentEvaluationWindow(
+      evaluationSeriesStartsAt,
+      evaluationSeriesStartsAt + effectiveEvaluationWindowSeconds * 1000,
+      currentTimeMs
+    );
+    const windowStartsAt = baseWindow.startsAt;
+    const windowEndsAt = baseWindow.endsAt;
     const windowHistory = telemetryHistory.filter((payload) => {
       const timestampMs = getTelemetryTimestampMs(payload);
       return (
@@ -2302,14 +2450,14 @@ export default function App() {
       startsAt: windowStartsAt,
       endsAt: windowEndsAt,
       sampleCount: windowHistory.length,
-      isAgentReported: Boolean(agentWindow),
-      hasExpiredReportedWindow: Boolean(agentWindow) && windowStartsAt !== agentWindow.startsAt,
+      isAgentReported: false,
+      hasExpiredReportedWindow: false,
     };
   }, [
+    currentTimeMs,
     effectiveEvaluationWindowSeconds,
-    latestTelemetry,
+    evaluationSeriesStartsAt,
     telemetryHistory,
-    telemetryWindow.endsAt,
   ]);
 
   const accumulatedUsage = useMemo(() => {
@@ -2319,9 +2467,7 @@ export default function App() {
       return usageMap;
     }
 
-    const history = evaluationWindow.isAgentReported
-      ? evaluationWindow.history
-      : telemetryWindow.history;
+    const history = evaluationWindow.history;
 
     history.forEach((payload) => {
       (payload.usage || []).forEach((entry) => {
@@ -2351,14 +2497,109 @@ export default function App() {
   }, [
     evaluationWindow.hasExpiredReportedWindow,
     evaluationWindow.history,
-    evaluationWindow.isAgentReported,
-    telemetryWindow,
   ]);
 
-  const currentPcName = useMemo(
-    () => getTelemetryPcName(latestTelemetry),
-    [latestTelemetry]
-  );
+  useEffect(() => {
+    const originalStartsAt = evaluationSeriesStartsAt;
+    if (!config || !originalStartsAt || evaluationWindow.startsAt <= originalStartsAt) {
+      return;
+    }
+
+    const completedAt = evaluationWindow.startsAt;
+    const completedStartsAt = completedAt - effectiveEvaluationWindowSeconds * 1000;
+    const countersByName = new Map();
+    let completedSampleCount = 0;
+    telemetryHistory.forEach((payload) => {
+      const timestampMs = getTelemetryTimestampMs(payload);
+      if (
+        timestampMs === null ||
+        timestampMs < completedStartsAt ||
+        timestampMs >= completedAt
+      ) return;
+      completedSampleCount += 1;
+
+      (payload.usage || []).forEach((entry) => {
+        const current = countersByName.get(entry.app_name) || createUsageCounters();
+        const next = readUsageCounters(entry);
+        Object.keys(current).forEach((key) => {
+          if (typeof current[key] === 'number') current[key] += Number(next[key]) || 0;
+        });
+        countersByName.set(entry.app_name, current);
+      });
+    });
+
+    if (completedSampleCount === 0) return;
+
+    const nextDecisions = {};
+    const addDecision = (name, type, policy, workedRuntimeSeconds, consumedTokens = 0) => {
+      const key = getEvaluationDecisionKey(
+        currentPcName,
+        type,
+        name,
+        originalStartsAt
+      );
+      const existing = completedEvaluationDecisions[key];
+      if (existing?.completedAt >= completedAt) return;
+      nextDecisions[key] = {
+        ...getReclaimDecision({
+          policy,
+          workedRuntimeSeconds,
+          consumedTokens,
+          evaluationComplete: true,
+        }),
+        completedAt,
+      };
+    };
+
+    (config.licensed_apps || []).forEach((appName) => {
+      const counters = countersByName.get(appName) || createUsageCounters();
+      const type = getAppType(config, appName);
+      const policy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        appName,
+        getAppPolicy(config, appName),
+        { type }
+      );
+      addDecision(appName, type, policy, counters.workedRuntimeSeconds);
+    });
+
+    getUniqueExtensionRules(config.extensions || []).forEach((extension) => {
+      const counters = countersByName.get(extension.name) || createUsageCounters();
+      const policy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        extension.name,
+        extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY,
+        { type: extension.type, parentApp: extension.parentApps }
+      );
+      addDecision(
+        extension.name,
+        extension.type,
+        policy,
+        extension.type === 'agent'
+          ? counters.automationWorkedSeconds
+          : counters.workedRuntimeSeconds,
+        counters.consumedTokens
+      );
+    });
+
+    if (Object.keys(nextDecisions).length === 0) return;
+    setCompletedEvaluationDecisions((current) => {
+      const updated = { ...current, ...nextDecisions };
+      return updated;
+    });
+  }, [
+    completedEvaluationDecisions,
+    config,
+    currentPcName,
+    deploymentPolicyRecords,
+    effectiveEvaluationWindow.seconds,
+    effectiveEvaluationWindowSeconds,
+    evaluationSeriesStartsAt,
+    evaluationWindow.startsAt,
+    telemetryHistory,
+  ]);
 
   const usageByApp = useMemo(() => {
     if (!config) return [];
@@ -2377,18 +2618,15 @@ export default function App() {
         appName,
         baseMonthlyCost
       );
-      const reclaimPolicy = getAppPolicy(config, appName);
+      const appType = getAppType(config, appName);
+      const reclaimPolicy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        appName,
+        getAppPolicy(config, appName),
+        { type: appType }
+      );
       const firstSeenAt = getAppFirstSeenAt(config, appName);
-      const observationStartedAt = getObservationStartedAt(config, firstSeenAt);
-      const decisionObservationStartedAt = evaluationWindow.isAgentReported
-        ? new Date(evaluationWindow.startsAt).toISOString()
-        : observationStartedAt;
-      const decisionFirstSeenAt = evaluationWindow.isAgentReported
-        ? decisionObservationStartedAt
-        : firstSeenAt;
-      const decisionNowMs = evaluationWindow.isAgentReported
-        ? Date.now()
-        : telemetryWindow.endsAt;
       const telemetryLastResetForAppMs = getTelemetryLastResetForAppMs(
         latestTelemetry,
         appName
@@ -2396,22 +2634,20 @@ export default function App() {
       const lastSeenAt = telemetryLastResetForAppMs
         ? new Date(telemetryLastResetForAppMs).toISOString()
         : getLastSeenAt(config, telemetryHistory, appName);
-      const appType = getAppType(config, appName);
       const hasAgentExtension = appHasAgentExtension(config, appName);
-      const policyUsageCounters = evaluationWindow.isAgentReported
-        ? usageCounters
-        : getUsageCountersForWindow(
-            telemetryHistory,
-            appName,
-            telemetryWindow.endsAt,
-            getPolicyValue(reclaimPolicy, 'evaluation_window_seconds')
-          );
+      const policyUsageCounters = usageCounters;
       const reclaimDecision = getReclaimDecision({
         policy: reclaimPolicy,
-        firstSeenAt: decisionFirstSeenAt,
-        observationStartedAt: decisionObservationStartedAt,
         workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
-        nowMs: decisionNowMs,
+        previousDecision:
+          completedEvaluationDecisions[
+            getEvaluationDecisionKey(
+              currentPcName,
+              appType,
+              appName,
+              evaluationSeriesStartsAt
+            )
+          ],
       });
 
       return {
@@ -2441,8 +2677,12 @@ export default function App() {
   }, [
     config,
     accumulatedUsage,
+    completedEvaluationDecisions,
     costOverrides,
     currentPcName,
+    currentTimeMs,
+    deploymentPolicyRecords,
+    evaluationSeriesStartsAt,
     evaluationWindow.isAgentReported,
     latestTelemetry,
     telemetryHistory,
@@ -2479,31 +2719,17 @@ export default function App() {
         extension.name,
         extension.lastSeenAt
       );
-      const reclaimPolicy = extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY;
-      const observationStartedAt = getObservationStartedAt(
-        config,
-        extension.firstSeenAt
+      const reclaimPolicy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        extension.name,
+        extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY,
+        { type: extension.type, parentApp: extension.parentApps }
       );
-      const decisionObservationStartedAt = evaluationWindow.isAgentReported
-        ? new Date(evaluationWindow.startsAt).toISOString()
-        : observationStartedAt;
-      const decisionFirstSeenAt = evaluationWindow.isAgentReported
-        ? decisionObservationStartedAt
-        : extension.firstSeenAt || decisionObservationStartedAt;
-      const decisionNowMs = evaluationWindow.isAgentReported
-        ? Date.now()
-        : telemetryWindow.endsAt;
-      const policyUsageCounters = evaluationWindow.isAgentReported
-        ? {
-            ...usageCounters,
-            workedRuntimeSeconds,
-          }
-        : getUsageCountersForWindow(
-            telemetryHistory,
-            extension.name,
-            telemetryWindow.endsAt,
-            getPolicyValue(reclaimPolicy, 'evaluation_window_seconds')
-          );
+      const policyUsageCounters = {
+        ...usageCounters,
+        workedRuntimeSeconds,
+      };
       const modelUsage = getModelUsageForExtension(accumulatedUsage, extension.name);
       const activeModelNames = modelUsage
         .filter((model) => model.workedRuntimeSeconds > 0)
@@ -2521,11 +2747,17 @@ export default function App() {
         null;
       const reclaimDecision = getReclaimDecision({
         policy: reclaimPolicy,
-        firstSeenAt: decisionFirstSeenAt,
-        observationStartedAt: decisionObservationStartedAt,
         workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
         consumedTokens,
-        nowMs: decisionNowMs,
+        previousDecision:
+          completedEvaluationDecisions[
+            getEvaluationDecisionKey(
+              currentPcName,
+              extension.type,
+              extension.name,
+              evaluationSeriesStartsAt
+            )
+          ],
       });
       const detectedPcNames = getDetectedPcNamesForUsage(
         telemetryHistory,
@@ -2574,6 +2806,11 @@ export default function App() {
   }, [
     config,
     accumulatedUsage,
+    completedEvaluationDecisions,
+    currentPcName,
+    currentTimeMs,
+    deploymentPolicyRecords,
+    evaluationSeriesStartsAt,
     evaluationWindow.isAgentReported,
     telemetryHistory,
     telemetryWindow.endsAt,
@@ -2604,18 +2841,15 @@ export default function App() {
         appName,
         baseUnitMonthlyCost
       );
-      const reclaimPolicy = getAppPolicy(config, appName);
+      const appType = getAppType(config, appName);
+      const reclaimPolicy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        appName,
+        getAppPolicy(config, appName),
+        { type: appType }
+      );
       const firstSeenAt = getAppFirstSeenAt(config, appName);
-      const observationStartedAt = getObservationStartedAt(config, firstSeenAt);
-      const decisionObservationStartedAt = evaluationWindow.isAgentReported
-        ? new Date(evaluationWindow.startsAt).toISOString()
-        : observationStartedAt;
-      const decisionFirstSeenAt = evaluationWindow.isAgentReported
-        ? decisionObservationStartedAt
-        : firstSeenAt;
-      const decisionNowMs = evaluationWindow.isAgentReported
-        ? Date.now()
-        : telemetryWindow.endsAt;
       const telemetryLastResetForAppMs = getTelemetryLastResetForAppMs(
         latestTelemetry,
         appName
@@ -2623,22 +2857,20 @@ export default function App() {
       const lastSeenAt = telemetryLastResetForAppMs
         ? new Date(telemetryLastResetForAppMs).toISOString()
         : getLastSeenAt(config, telemetryHistory, appName);
-      const appType = getAppType(config, appName);
       const hasAgentExtension = appHasAgentExtension(config, appName);
-      const policyUsageCounters = evaluationWindow.isAgentReported
-        ? usageCounters
-        : getUsageCountersForWindow(
-            telemetryHistory,
-            appName,
-            telemetryWindow.endsAt,
-            getPolicyValue(reclaimPolicy, 'evaluation_window_seconds')
-          );
+      const policyUsageCounters = usageCounters;
       const reclaimDecision = getReclaimDecision({
         policy: reclaimPolicy,
-        firstSeenAt: decisionFirstSeenAt,
-        observationStartedAt: decisionObservationStartedAt,
         workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
-        nowMs: decisionNowMs,
+        previousDecision:
+          completedEvaluationDecisions[
+            getEvaluationDecisionKey(
+              currentPcName,
+              appType,
+              appName,
+              evaluationSeriesStartsAt
+            )
+          ],
       });
       const detectedPcNames = getDetectedPcNamesForUsage(telemetryHistory, appName);
       const detectedSeatCount = detectedPcNames.length;
@@ -2718,8 +2950,12 @@ export default function App() {
   }, [
     config,
     accumulatedUsage,
+    completedEvaluationDecisions,
     costOverrides,
     currentPcName,
+    currentTimeMs,
+    deploymentPolicyRecords,
+    evaluationSeriesStartsAt,
     evaluationWindow.isAgentReported,
     latestTelemetry,
     telemetryHistory,
@@ -3427,6 +3663,9 @@ export default function App() {
     (sortedUsageByApp.length > 0 || extensionAttributionRows.length > 0);
 
   const sendEmailSummary = useCallback(async () => {
+    if (!sendEvaluationEmailEnabled) {
+      throw new Error('Evaluation emails are disabled in Settings.');
+    }
     if (!emailRecipient) {
       throw new Error('Recipient email is not configured.');
     }
@@ -3501,10 +3740,16 @@ export default function App() {
     currentPcName,
     config,
     latestTelemetry,
+    sendEvaluationEmailEnabled,
   ]);
 
   useEffect(() => {
-    if (!emailRecipient || !evaluationWindow.endsAt || !isEmailSummaryReady) {
+    if (
+      !sendEvaluationEmailEnabled ||
+      !emailRecipient ||
+      !evaluationWindow.endsAt ||
+      !isEmailSummaryReady
+    ) {
       return undefined;
     }
 
@@ -3543,6 +3788,7 @@ export default function App() {
     config,
     latestTelemetry,
     sendEmailSummary,
+    sendEvaluationEmailEnabled,
   ]);
 
   const toggleReportDimension = (dimension) => {
@@ -3658,21 +3904,32 @@ export default function App() {
 
     setIsDeployingAgent(true);
     setDeployTarget(
-      `Preparing deployment for ${normalizedPcName} with ${onboardedAppLicenses.length} app licenses`
+      `Saving deployment policies in UI memory for ${normalizedPcName} with ${onboardedAppLicenses.length} app licenses`
     );
 
     window.setTimeout(() => {
+      const nextRecords = buildDeploymentPolicyRecords(
+        deploymentConfig,
+        onboardedAppLicenses
+      );
+      const nextRecordIds = new Set(nextRecords.map(getDeploymentRecordId));
+      setDeploymentPolicyRecords((currentRecords) => [
+        ...currentRecords.filter(
+          (record) => !nextRecordIds.has(getDeploymentRecordId(record))
+        ),
+        ...nextRecords,
+      ]);
       setIsDeployingAgent(false);
       setLastDeploymentConfig(deploymentConfig);
       setDeployTarget(
-        `Deployment config queued for ${normalizedPcName} with ${onboardedAppLicenses.length} app licenses`
+        `Deployment policies saved in UI memory for ${normalizedPcName} (${nextRecords.length} records)`
       );
       setDeployForm((currentForm) => ({
         ...currentForm,
         pcName: '',
         user: '',
       }));
-    }, 1600);
+    }, 500);
   };
 
   const handleRegisterPolicy = (event) => {
@@ -3682,7 +3939,6 @@ export default function App() {
     const evaluationWindowValue = Number(policyRegistrationForm.evaluationWindowValue);
     const evaluationWindowUnit = policyRegistrationForm.evaluationWindowUnit;
     const workedThresholdHours = Number(policyRegistrationForm.workedThresholdHours);
-    const minimumObservationDays = Number(policyRegistrationForm.minimumObservationDays);
 
     if (!policyName) {
       setPolicyRegistrationStatus('Enter a policy name to register.');
@@ -3693,9 +3949,7 @@ export default function App() {
       !Number.isFinite(evaluationWindowValue) ||
       evaluationWindowValue < 0.1 ||
       !Number.isFinite(workedThresholdHours) ||
-      workedThresholdHours < 0.1 ||
-      !Number.isFinite(minimumObservationDays) ||
-      minimumObservationDays < 0.1
+      workedThresholdHours < 0.1
     ) {
       setPolicyRegistrationStatus('Policy timing values must be at least 0.1.');
       return;
@@ -3706,11 +3960,11 @@ export default function App() {
       evaluationWindowValue,
       evaluationWindowUnit,
       evaluationWindowDays:
-        evaluationWindowUnit === 'Days'
-          ? evaluationWindowValue
-          : evaluationWindowValue / 24,
+        getPolicyWindowSeconds(evaluationWindowValue, {
+          evaluationWindowUnit,
+        }) /
+        (24 * 60 * 60),
       workedThresholdHours,
-      minimumObservationDays,
     };
 
     const normalizedPolicyName = policyName.toLowerCase();
@@ -3783,7 +4037,6 @@ export default function App() {
       ),
       evaluationWindowUnit: policy.evaluationWindowUnit || 'Days',
       workedThresholdHours: String(policy.workedThresholdHours),
-      minimumObservationDays: String(policy.minimumObservationDays || 7),
     });
     setPolicyRegistrationStatus(`Editing ${policy.name} policy.`);
   };
@@ -4092,6 +4345,7 @@ export default function App() {
         resetForAgentStartChange(data);
         setConfig(data);
         setError('');
+
       })
       .catch((err) => {
         setConfig(null);
@@ -4111,6 +4365,14 @@ export default function App() {
         const agentRestarted = resetForAgentStartChange(data);
         setLatestTelemetry(data);
         setError('');
+
+        if (data?.timestamp && !data.telemetry_pending) {
+          fetch(`${BACKEND_BASE_URL}/api/telemetry`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+          }).catch((err) => setError('Failed to persist telemetry: ' + err.message));
+        }
 
         setTelemetryHistory((currentHistory) => {
           if (!data || !data.timestamp) {
@@ -4156,6 +4418,14 @@ export default function App() {
   };
 
   useEffect(() => {
+    const clockIntervalId = window.setInterval(() => {
+      setCurrentTimeMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(clockIntervalId);
+  }, []);
+
+  useEffect(() => {
     loadConfig();
     loadTelemetry();
 
@@ -4169,83 +4439,47 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <nav
-        className={
-          isNavCollapsedAfterSelect
-            ? 'top-nav nav-collapsed-after-select'
-            : 'top-nav'
-        }
-        aria-label="Primary navigation"
-        onMouseLeave={() => setIsNavCollapsedAfterSelect(false)}
-      >
-        <div className="brand-mark">
-          <span className="brand-icon">
-            <NavIcon type="brand" />
-          </span>
-          <span>AgentOps</span>
-        </div>
-        <div className="nav-actions">
-          <button
-            className={
-              activeView === 'unified-dashboard' ? 'nav-link active' : 'nav-link'
-            }
-            type="button"
-            onClick={(event) => handleNavSelection(event, 'unified-dashboard')}
-          >
-            <span className="nav-glyph">
-              <NavIcon type="dashboard" />
-            </span>
-            <span className="nav-label">Dashboard</span>
-          </button>
-          <button
-            className={activeView === 'dashboard' ? 'nav-link active' : 'nav-link'}
-            type="button"
-            onClick={(event) => handleNavSelection(event, 'dashboard')}
-          >
-            <span className="nav-glyph">
-              <NavIcon type="software" />
-            </span>
-            <span className="nav-label">Software Licsence Management</span>
-          </button>
-          <button
-            className={
-              activeView === 'agent-management' ? 'nav-link active' : 'nav-link'
-            }
-            type="button"
-            onClick={(event) => handleNavSelection(event, 'agent-management')}
-          >
-            <span className="nav-glyph">
-              <NavIcon type="agent" />
-            </span>
-            <span className="nav-label">Agent Management</span>
-          </button>
-          <button
-            className={
-              activeView === 'reporting-insights' ? 'nav-link active' : 'nav-link'
-            }
-            type="button"
-            onClick={(event) => handleNavSelection(event, 'reporting-insights')}
-          >
-            <span className="nav-glyph">
-              <NavIcon type="reports" />
-            </span>
-            <span className="nav-label">Reporting & Insights</span>
-          </button>
-        </div>
-      </nav>
+      <AppNavigation
+        activeView={activeView}
+        collapsed={isNavCollapsedAfterSelect}
+        isSettingsOpen={isSettingsOpen}
+        onNavigate={handleNavSelection}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onResetCollapse={() => setIsNavCollapsedAfterSelect(false)}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        sendEvaluationEmailEnabled={sendEvaluationEmailEnabled}
+        onClose={() => setIsSettingsOpen(false)}
+        onEmailSettingChange={(enabled) => {
+          setSendEvaluationEmailEnabled(enabled);
+          if (!enabled) setEmailSummaryStatus('');
+        }}
+      />
 
       <main className="main-content">
-        <header className="hero">
-          <div>
-            <p className="eyebrow">{heroCopy.eyebrow}</p>
-            <h1>{heroCopy.title}</h1>
-            <p>{heroCopy.description}</p>
-          </div>
-        </header>
+        {activeView !== 'ai-assistant' && (
+          <header className="hero">
+            <div>
+              <p className="eyebrow">{heroCopy.eyebrow}</p>
+              <h1>{heroCopy.title}</h1>
+              <p>{heroCopy.description}</p>
+            </div>
+          </header>
+        )}
 
-        {error && <div className="error-message">{error}</div>}
-        {emailSummaryStatus && (
+        {error &&
+          !(
+            activeView === 'reporting-insights' &&
+            error.startsWith('Failed to fetch telemetry:')
+          ) && <div className="error-message">{error}</div>}
+        {sendEvaluationEmailEnabled && emailSummaryStatus && (
           <div className="email-summary-status">{emailSummaryStatus}</div>
+        )}
+
+        {activeView === 'ai-assistant' && (
+          <ChatAssistant backendBaseUrl={MONITORING_AGENT_BASE_URL} clientId={portalClientId} />
         )}
 
         {activeView === 'unified-dashboard' && (
@@ -4741,9 +4975,9 @@ export default function App() {
               <div>
                 <h2>App Licenses</h2>
                 <p>
-                  Reclaimable licenses are evaluated per app policy after the
-                  minimum observation period. Idle grace periods are configured
-                  inside each reclaim policy.
+                  License decisions are finalized at the end of each evaluation
+                  window. The completed status remains in place until the next
+                  evaluation finishes.
                 </p>
                 <div className="tracking-window-meta">
                   <span>
@@ -4762,6 +4996,8 @@ export default function App() {
                 <button
                   className="dispatch-button"
                   type="button"
+                  disabled={!sendEvaluationEmailEnabled}
+                  title={!sendEvaluationEmailEnabled ? 'Enable evaluation emails in Settings' : undefined}
                   onClick={() => {
                     sendEmailSummary().catch((err) => {
                       setEmailSummaryStatus(`Email send failed: ${err.message}`);
@@ -5002,7 +5238,7 @@ export default function App() {
                   {extensionAttributionRows.length === 0 && (
                     <tr>
                       <td colSpan="8" className="empty-state">
-                        Waiting for extension attribution rules from the agent.
+                        Waiting for extension attribution rules from the tracker.
                       </td>
                     </tr>
                   )}
@@ -5538,12 +5774,12 @@ export default function App() {
           <>
           <section className="summary-grid" aria-label="Fleet summary">
             <article className="summary-card">
-              <span>Live Agents</span>
+              <span>Live Trackers</span>
               <strong>{fleetSummary.liveAgents}</strong>
               <small>{fleetSummary.totalDevices} devices registered</small>
             </article>
             <article className="summary-card summary-card-alert">
-              <span>Offline Agents</span>
+              <span>Offline Trackers</span>
               <strong>{fleetSummary.offlineAgents}</strong>
               <small>Devices needing redeploy or investigation</small>
             </article>
@@ -5573,7 +5809,7 @@ export default function App() {
           <section className="panel deploy-panel">
             <div className="panel-header">
               <div>
-                <h2>Deploy Agent to New PC</h2>
+                <h2>Deploy Tracker to New PC</h2>
                 <p>Prepare an installer assignment for a new endpoint before it joins the monitored fleet.</p>
               </div>
               {deployTarget && (
@@ -5617,7 +5853,7 @@ export default function App() {
                 ) : (
                   <>
                     <span className="action-symbol">+</span>
-                    Deploy Agent
+                    Deploy Tracker
                   </>
                 )}
               </button>
@@ -5626,16 +5862,16 @@ export default function App() {
               <div className="agent-config-preview">
                 <div className="agent-config-preview-header">
                   <div>
-                    <h3>Queued Agent Config</h3>
+                    <h3>Queued Tracker Config</h3>
                     <p>
-                      {lastDeploymentConfig.target_pc} receives{' '}
+                      Generated config includes{' '}
                       {lastDeploymentConfig.licensed_apps.length} licensed app
                       {lastDeploymentConfig.licensed_apps.length === 1
                         ? ''
                         : 's'}.
                     </p>
                   </div>
-                  <span>{lastDeploymentConfig.assigned_user}</span>
+                  <span>{lastDeploymentConfig.tracked_urls.length} tracked URLs</span>
                 </div>
                 <pre>
                   {JSON.stringify(lastDeploymentConfig, null, 2)}
@@ -5648,7 +5884,7 @@ export default function App() {
             <div className="panel-header">
               <div>
                 <h2>Onboard App License</h2>
-                <p>Select an inventory app and attach the reclaim policy that will be sent with the agent config.</p>
+                <p>Select an inventory app and attach the reclaim policy that will be sent with the tracker config.</p>
               </div>
               {licenseOnboardingStatus && (
                 <span className="deployment-status">{licenseOnboardingStatus}</span>
@@ -5943,7 +6179,7 @@ export default function App() {
             <div className="panel-header">
               <div>
                 <h2>Register Policy</h2>
-                <p>Create reusable reclaim policies for agent deployment and licensed app onboarding.</p>
+                <p>Create reusable reclaim policies for tracker deployment and licensed app onboarding.</p>
               </div>
               {policyRegistrationStatus && (
                 <span className="deployment-status">{policyRegistrationStatus}</span>
@@ -5986,17 +6222,6 @@ export default function App() {
                 />
               </label>
               <label>
-                <span>Observation Window</span>
-                <input
-                  min="0.1"
-                  name="minimumObservationDays"
-                  step="0.1"
-                  type="number"
-                  value={policyRegistrationForm.minimumObservationDays}
-                  onChange={handlePolicyRegistrationInputChange}
-                />
-              </label>
-              <label>
                 <span>Window Unit</span>
                 <select
                   name="evaluationWindowUnit"
@@ -6021,7 +6246,6 @@ export default function App() {
                     <th>Policy</th>
                     <th>Evaluation Window</th>
                     <th>Active Use Threshold</th>
-                    <th>Minimum Observation</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -6037,12 +6261,6 @@ export default function App() {
                       <td>{formatEvaluationWindow(policy)}</td>
                       <td>
                         {formatPolicyWindowValue(policy.workedThresholdHours, policy)}
-                      </td>
-                      <td>
-                        {formatPolicyWindowValue(
-                          policy.minimumObservationDays || 7,
-                          policy
-                        )}
                       </td>
                       <td>
                         <div className="policy-actions">
@@ -6085,7 +6303,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>PC Name & User</th>
-                    <th>Agent Status</th>
+                    <th>Tracker Status</th>
                     <th>Active License Count</th>
                     <th>Total License Cost</th>
                     <th>Action</th>
@@ -6186,9 +6404,9 @@ export default function App() {
             <section className="panel detail-panel">
               <div className="panel-header">
                 <div>
-                  <h2>{selectedDevice.pcName} Agent Details</h2>
+                  <h2>{selectedDevice.pcName} Tracker Details</h2>
                   <p>
-                    Live agent runtime, tracked software, policy, and telemetry
+                    Live tracker runtime, tracked software, policy, and telemetry
                     heartbeat for this machine.
                   </p>
                 </div>
@@ -6212,7 +6430,7 @@ export default function App() {
 
               <div className="detail-grid">
                 <article className="detail-card">
-                  <span>Agent Runtime</span>
+                  <span>Tracker Runtime</span>
                   <strong>{selectedDevice.agentVersion}</strong>
                   <small>Policy: {selectedDevice.policy}</small>
                 </article>
@@ -6238,7 +6456,7 @@ export default function App() {
                     <div className="chart-card-header">
                       <div>
                         <h3>Core App Engagement (24h Velocity)</h3>
-                        <p>Active minutes by hour for this agent's highest-cost tracked apps.</p>
+                        <p>Active minutes by hour for this tracker's highest-cost tracked apps.</p>
                       </div>
                     </div>
                     <div className="chart-frame">
@@ -6326,21 +6544,21 @@ export default function App() {
                     ))}
                     {selectedDeviceApps.length === 0 && (
                       <div className="empty-inline">
-                        Waiting for tracked software telemetry from this agent.
+                        Waiting for tracked software telemetry from this tracker.
                       </div>
                     )}
                   </div>
                 </div>
 
                 <div>
-                  <h3>Agent Tracking Information</h3>
+                  <h3>Tracker Information</h3>
                   <div className="tracking-feed">
                     <div>
                       <span>Machine user</span>
                       <strong>{selectedDevice.user}</strong>
                     </div>
                     <div>
-                      <span>Agent status</span>
+                      <span>Tracker status</span>
                       <strong>{selectedDevice.isLive ? 'Streaming' : 'Disconnected'}</strong>
                     </div>
                     <div>

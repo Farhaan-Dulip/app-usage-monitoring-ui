@@ -9,6 +9,14 @@ A simple React + Vite dashboard for inspecting telemetry payloads from the app u
 3. Start the local email backend with `npm run start:server`
 4. In a separate terminal, run `npm run dev`
 
+The backend persists portal records and telemetry in MongoDB. It defaults to
+`mongodb://localhost:27017/app-usage-monitoring`; override this with the
+`MONGO_URI` and `MONGO_DATABASE` environment variables.
+
+To copy data from the previous wrapper-document schema in
+`app-license-monitoring` into the normalized collections, run `npm run migrate:mongo`.
+The migration is idempotent and leaves the source database unchanged.
+
 ## AWS SES Email Summary
 
 The app now uses AWS SES to send evaluation window summaries.
