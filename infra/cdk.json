@@ -3,7 +3,7 @@
   "context": {
     "region": "us-east-1",
     "allowedCidrs": "175.157.62.175/32",
-    "appsEnabled": false,
+    "appsEnabled": true,
     "agentRepoPath": "../../app-usage-monitor-agent",
     "brokerTlsSecretArn": "arn:aws:secretsmanager:us-east-1:978387602501:secret:usage-poc/rabbitmq-tls-tuG1qv",
     "brokerTlsServerName": "mq.usage-poc.internal",
