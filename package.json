@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "start:server": "node server.js",
     "start:telemetry-consumer": "node workers/telemetryConsumer.js",
-    "migrate:mongo": "node scripts/migrate-mongo.js"
+    "migrate:mongo": "node scripts/migrate-mongo.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.500.0",

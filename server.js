@@ -5,7 +5,17 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { MongoClient, ObjectId } from 'mongodb';
-import { persistTelemetry, validateTelemetryPayload } from './services/telemetryPersistence.js';
+import {
+  ensureTelemetryIndexes,
+  persistTelemetry,
+  validateTelemetryPayload,
+} from './services/telemetryPersistence.js';
+import {
+  appAliasFilter,
+  buildAppAliases,
+  isExplicitLicenseRequest,
+} from './services/assistantMatching.js';
+import { SERVICE_TOKEN_HEADER, serviceTokenMatches } from './services/serviceAuth.js';
 
 dotenv.config();
 
@@ -25,17 +35,26 @@ app.use(
 );
 app.use(express.json());
 
+// Optional local-development fallback; deployed environments use env vars only.
 const configPath = resolve(process.cwd(), 'src', 'app_config.json');
 let appConfig = {};
 
-try {
-  appConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
-} catch (error) {
-  console.error('Unable to read src/app_config.json:', error.message);
-  process.exit(1);
+if (existsSync(configPath)) {
+  try {
+    appConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch (error) {
+    console.error('Unable to read src/app_config.json:', error.message);
+    process.exit(1);
+  }
 }
 
-const recipientEmail = process.env.SES_RECIPIENT_EMAIL || appConfig?.email;
+// SES_RECIPIENT_EMAIL may list several comma-separated addresses; the first is
+// the default and only listed addresses can receive summaries.
+const allowedRecipientEmails = String(process.env.SES_RECIPIENT_EMAIL || appConfig?.email || '')
+  .split(',')
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+const recipientEmail = allowedRecipientEmails[0];
 const senderEmail = process.env.SES_SOURCE_EMAIL || appConfig?.ses_source_email;
 const awsRegion = process.env.AWS_REGION || appConfig?.aws_region;
 const sesClient = senderEmail && awsRegion ? new SESClient({ region: awsRegion }) : null;
@@ -67,6 +86,9 @@ const assistantRequests = database.collection('assistant_requests');
 const applicationTimeZone = process.env.APP_TIME_ZONE || 'Asia/Colombo';
 const assistantAgentUrl =
   process.env.ASSISTANT_AGENT_URL || 'http://localhost:3002/api/assistant/chat';
+// Kept above the agent's own deadline so the agent can finish or fail cleanly.
+const assistantAgentTimeoutMs = Number(process.env.ASSISTANT_AGENT_TIMEOUT_MS) || 25000;
+// Shared secret for both directions: portal -> agent chat, agent -> portal MCP tools.
 const mcpServiceToken = process.env.MCP_SERVICE_TOKEN?.trim();
 
 function assistantAppName(record) {
@@ -92,7 +114,7 @@ function requireMcpService(req, res, next) {
   if (!mcpServiceToken) {
     return res.status(503).json({ error: 'MCP service authentication is not configured' });
   }
-  if (req.get('X-MCP-Service-Token') !== mcpServiceToken) {
+  if (!serviceTokenMatches(req.get(SERVICE_TOKEN_HEADER), mcpServiceToken)) {
     return res.status(401).json({ error: 'Unauthorized MCP service request' });
   }
   return next();
@@ -207,11 +229,12 @@ async function answerAssistantQuestion(question) {
 }
 
 async function answerWithMonitoringAgent(messages) {
+  if (!mcpServiceToken) throw new Error('MCP_SERVICE_TOKEN is not configured');
   const response = await fetch(assistantAgentUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', [SERVICE_TOKEN_HEADER]: mcpServiceToken },
     body: JSON.stringify({ messages }),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(assistantAgentTimeoutMs),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -226,10 +249,7 @@ async function answerWithMonitoringAgent(messages) {
 async function createAssistantRequest(question, clientId, requester) {
   const licenses = await recordCollections.onboardedAppLicenses.find({}).limit(500).toArray();
   const requestedApp = findRequestedApp(question, licenses);
-  const isExplicitRequest = /\b(submit|create|start|request)\b/i.test(question) &&
-    /\b(license|access|seat)\b/i.test(question);
-
-  if (!isExplicitRequest || !requestedApp) return null;
+  if (!isExplicitLicenseRequest(question) || !requestedApp) return null;
 
   const requesterName = String(requester?.name || '').trim();
   const requesterEmail = String(requester?.email || '').trim().toLowerCase();
@@ -616,17 +636,35 @@ app.patch('/api/license-requests/:requestId', async (req, res) => {
   }
 });
 
+// Read-only endpoints backing the AI agent's MCP tools (service-token only;
+// blocked at the load balancer). App names resolve through inventory aliases
+// so `Postman`, `postman` and `postman.exe` all match, and filtering happens
+// in MongoDB rather than over a capped in-memory sample.
+const MCP_RECORD_LIMIT = 5000;
+
+async function resolveAppAliases(appName) {
+  const [inventory, licenses] = await Promise.all([
+    recordCollections.licensedApps.find({}, { projection: { appName: 1, processName: 1 } }).toArray(),
+    recordCollections.onboardedAppLicenses.find({}, { projection: { appName: 1, processName: 1 } }).toArray(),
+  ]);
+  return buildAppAliases(appName, [...inventory, ...licenses]);
+}
+
+function requiredAppName(req, res) {
+  const appName = String(req.query.appName || '').trim().slice(0, 120);
+  if (!appName) res.status(400).json({ error: 'appName is required' });
+  return appName;
+}
+
 app.get('/api/mcp/license-availability', requireMcpService, async (req, res) => {
-  const appName = String(req.query.appName || '').trim();
-  if (!appName) return res.status(400).json({ error: 'appName is required' });
+  const appName = requiredAppName(req, res);
+  if (!appName) return undefined;
   try {
-    const [licenses, decisions] = await Promise.all([
-      recordCollections.onboardedAppLicenses.find({}).limit(500).toArray(),
-      recordCollections.completedEvaluationDecisions.find({}).limit(500).toArray(),
+    const filter = appAliasFilter(await resolveAppAliases(appName));
+    const [appLicenses, appDecisions] = await Promise.all([
+      recordCollections.onboardedAppLicenses.find(filter).limit(MCP_RECORD_LIMIT).toArray(),
+      recordCollections.completedEvaluationDecisions.find(filter).limit(MCP_RECORD_LIMIT).toArray(),
     ]);
-    const matchesApp = (record) => assistantAppName(record).toLowerCase() === appName.toLowerCase();
-    const appLicenses = licenses.filter(matchesApp);
-    const appDecisions = decisions.filter(matchesApp);
     const totalSeats = appLicenses.reduce((sum, row) => sum + assistantNumber(row, ['totalSeats', 'total_seats', 'seats', 'quantity']), 0);
     const assignedSeats = appLicenses.reduce((sum, row) => sum + assistantNumber(row, ['assignedSeats', 'assigned_seats', 'usedSeats']), 0);
     const explicitAvailable = appLicenses.reduce((sum, row) => sum + assistantNumber(row, ['availableSeats', 'available_seats']), 0);
@@ -640,7 +678,7 @@ app.get('/api/mcp/license-availability', requireMcpService, async (req, res) => 
 
 app.get('/api/mcp/reclaimable-summary', requireMcpService, async (_req, res) => {
   try {
-    const decisions = await recordCollections.completedEvaluationDecisions.find({}).limit(500).toArray();
+    const decisions = await recordCollections.completedEvaluationDecisions.find({}).limit(MCP_RECORD_LIMIT).toArray();
     const reclaimable = decisions.filter(isReclaimableDecision);
     const byApplication = reclaimable.reduce((counts, row) => {
       const name = assistantAppName(row) || 'Unknown application';
@@ -654,11 +692,11 @@ app.get('/api/mcp/reclaimable-summary', requireMcpService, async (_req, res) => 
 });
 
 app.get('/api/mcp/decision-summary', requireMcpService, async (req, res) => {
-  const appName = String(req.query.appName || '').trim();
-  if (!appName) return res.status(400).json({ error: 'appName is required' });
+  const appName = requiredAppName(req, res);
+  if (!appName) return undefined;
   try {
-    const decisions = await recordCollections.completedEvaluationDecisions.find({}).limit(500).toArray();
-    const appDecisions = decisions.filter((row) => assistantAppName(row).toLowerCase() === appName.toLowerCase());
+    const filter = appAliasFilter(await resolveAppAliases(appName));
+    const appDecisions = await recordCollections.completedEvaluationDecisions.find(filter).limit(MCP_RECORD_LIMIT).toArray();
     const categories = appDecisions.reduce((counts, row) => {
       const category = assistantDecisionText(row) || 'Unspecified';
       counts[category] = (counts[category] || 0) + 1;
@@ -671,12 +709,13 @@ app.get('/api/mcp/decision-summary', requireMcpService, async (req, res) => {
 });
 
 app.get('/api/mcp/reclaimable-details', requireMcpService, async (req, res) => {
-  const appName = String(req.query.appName || '').trim();
-  if (!appName) return res.status(400).json({ error: 'appName is required' });
+  const appName = requiredAppName(req, res);
+  if (!appName) return undefined;
   try {
-    const decisions = await recordCollections.completedEvaluationDecisions.find({}).sort({ completed_date: -1, completed_time: -1 }).limit(500).toArray();
+    const filter = appAliasFilter(await resolveAppAliases(appName));
+    const decisions = await recordCollections.completedEvaluationDecisions.find(filter).sort({ completed_date: -1, completed_time: -1 }).limit(MCP_RECORD_LIMIT).toArray();
     const details = decisions
-      .filter((row) => assistantAppName(row).toLowerCase() === appName.toLowerCase() && isReclaimableDecision(row))
+      .filter(isReclaimableDecision)
       .slice(0, 50)
       .map((row) => ({ application: assistantAppName(row) || appName, pcName: row.pcName || row.pc_name || row.device_name || row.device_id || 'Not recorded', decision: assistantDecisionText(row) || 'Reclaimable', completedDate: row.completed_date || null, completedTime: row.completed_time || null, timeZone: row.time_zone || null }));
     return res.json({ application: appName, reclaimableDecisionCount: details.length, details, excludedFields: ['user identity', 'raw telemetry'] });
@@ -697,7 +736,13 @@ app.post('/api/telemetry', async (req, res) => {
 });
 
 app.post('/send-email-summary', async (req, res) => {
-  const { recipient = recipientEmail, subject, body, html } = req.body || {};
+  const { subject, body, html } = req.body || {};
+  // Never trust a client-supplied address: only configured recipients are allowed.
+  const requestedRecipient = String(req.body?.recipient || '').trim().toLowerCase();
+  if (requestedRecipient && !allowedRecipientEmails.includes(requestedRecipient)) {
+    return res.status(400).json({ error: 'Recipient is not an allowed summary address' });
+  }
+  const recipient = requestedRecipient || recipientEmail;
 
   if (!subject || !body) {
     return res.status(400).json({ error: 'Missing required fields: subject and body' });
@@ -790,8 +835,7 @@ async function startServer() {
     appSettings.createIndex({ client_id: 1 }, { sparse: true }),
     assistantRequests.createIndex({ clientId: 1, createdAt: -1 }),
   ]);
-  await telemetryEvents.createIndex({ device_key: 1, timestamp: 1 }, { unique: true });
-  await telemetryEvents.createIndex({ received_at: 1 });
+  await ensureTelemetryIndexes(telemetryEvents);
   app.listen(PORT, () => {
     console.log(`Backend server is running at http://localhost:${PORT}`);
     console.log(`MongoDB database: ${database.databaseName}`);

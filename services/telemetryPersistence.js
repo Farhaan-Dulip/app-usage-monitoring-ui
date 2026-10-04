@@ -52,3 +52,25 @@ export async function persistTelemetry(telemetryEvents, payload, source = 'http'
     { upsert: true }
   );
 }
+
+const INDEX_OPTIONS_CONFLICT = 85;
+
+// Raw telemetry expires after TELEMETRY_RETENTION_DAYS (default 30, 0 keeps
+// it forever). An existing non-TTL `received_at` index is replaced in place.
+export function telemetryRetentionSeconds(env = process.env) {
+  const days = Number(env.TELEMETRY_RETENTION_DAYS ?? 30);
+  return Number.isFinite(days) && days > 0 ? Math.round(days * 24 * 60 * 60) : 0;
+}
+
+export async function ensureTelemetryIndexes(telemetryEvents, env = process.env) {
+  await telemetryEvents.createIndex({ device_key: 1, timestamp: 1 }, { unique: true });
+  const expireAfterSeconds = telemetryRetentionSeconds(env);
+  const options = expireAfterSeconds ? { name: 'received_at_1', expireAfterSeconds } : { name: 'received_at_1' };
+  try {
+    await telemetryEvents.createIndex({ received_at: 1 }, options);
+  } catch (error) {
+    if (error?.code !== INDEX_OPTIONS_CONFLICT) throw error;
+    await telemetryEvents.dropIndex('received_at_1');
+    await telemetryEvents.createIndex({ received_at: 1 }, options);
+  }
+}

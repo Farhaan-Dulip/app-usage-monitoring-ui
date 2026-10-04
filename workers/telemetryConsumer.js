@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { MongoClient } from 'mongodb';
 import { startTelemetryConsumer } from '../messaging/telemetryConsumer.js';
+import { ensureTelemetryIndexes } from '../services/telemetryPersistence.js';
 
 dotenv.config();
 
@@ -10,9 +11,14 @@ const telemetryEvents = database.collection('telemetry_events');
 
 async function main() {
   await mongoClient.connect();
-  await telemetryEvents.createIndex({ device_key: 1, timestamp: 1 }, { unique: true });
-  await telemetryEvents.createIndex({ received_at: 1 });
-  await startTelemetryConsumer({ telemetryEvents });
+  await ensureTelemetryIndexes(telemetryEvents);
+  await startTelemetryConsumer({
+    telemetryEvents,
+    onClose: () => {
+      console.error('Exiting so the supervisor restarts the consumer.');
+      process.exit(1);
+    },
+  });
 }
 
 main().catch((error) => {
