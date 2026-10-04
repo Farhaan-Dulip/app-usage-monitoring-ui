@@ -1,15 +1,28 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
+import { persistTelemetry, validateTelemetryPayload } from './services/telemetryPersistence.js';
 
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: 'http://localhost:5173' }));
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Requests without an Origin header include server-to-server calls and local health checks.
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error('Origin is not allowed by CORS'));
+    },
+  })
+);
 app.use(express.json());
 
 const configPath = resolve(process.cwd(), 'src', 'app_config.json');
@@ -22,28 +35,10 @@ try {
   process.exit(1);
 }
 
-const recipientEmail = appConfig?.email;
+const recipientEmail = process.env.SES_RECIPIENT_EMAIL || appConfig?.email;
 const senderEmail = process.env.SES_SOURCE_EMAIL || appConfig?.ses_source_email;
 const awsRegion = process.env.AWS_REGION || appConfig?.aws_region;
-
-if (!recipientEmail) {
-  console.error('Recipient email is missing in src/app_config.json');
-  process.exit(1);
-}
-
-if (!senderEmail) {
-  console.error(
-    'Sender email is not configured. Set SES_SOURCE_EMAIL or app_config.json ses_source_email.'
-  );
-  process.exit(1);
-}
-
-if (!awsRegion) {
-  console.error('AWS region is not configured. Set AWS_REGION or app_config.json aws_region.');
-  process.exit(1);
-}
-
-const sesClient = new SESClient({ region: awsRegion });
+const sesClient = senderEmail && awsRegion ? new SESClient({ region: awsRegion }) : null;
 const mongoClient = new MongoClient(process.env.MONGO_URI || 'mongodb://localhost:27017');
 const database = mongoClient.db(process.env.MONGO_DATABASE || 'app-usage-monitoring');
 const telemetryEvents = database.collection('telemetry_events');
@@ -51,6 +46,7 @@ const recordCollections = {
   licensePolicies: database.collection('license_policies'),
   licensedApps: database.collection('licensed_apps'),
   onboardedAppLicenses: database.collection('onboarded_licenses'),
+  managerAssignments: database.collection('manager_assignments'),
   deploymentPolicyRecords: database.collection('deployment_records'),
   costOverrides: database.collection('cost_overrides'),
   completedEvaluationDecisions: database.collection('evaluation_decisions'),
@@ -59,6 +55,7 @@ const recordDefaults = {
   licensePolicies: [],
   licensedApps: [],
   onboardedAppLicenses: [],
+  managerAssignments: [],
   deploymentPolicyRecords: [],
   costOverrides: {},
   completedEvaluationDecisions: {},
@@ -66,7 +63,11 @@ const recordDefaults = {
 const reportSettings = database.collection('report_settings');
 const agentConfigurations = database.collection('agent_configurations');
 const appSettings = database.collection('app_settings');
+const assistantRequests = database.collection('assistant_requests');
 const applicationTimeZone = process.env.APP_TIME_ZONE || 'Asia/Colombo';
+const assistantAgentUrl =
+  process.env.ASSISTANT_AGENT_URL || 'http://localhost:3002/api/assistant/chat';
+const mcpServiceToken = process.env.MCP_SERVICE_TOKEN?.trim();
 
 function assistantAppName(record) {
   return record?.appName || record?.app_name || record?.name || record?.application || '';
@@ -80,6 +81,21 @@ function assistantDecisionText(record) {
 
 function isReclaimableDecision(record) {
   return /reclaim|available|unused|inactive|underutilized|release/i.test(assistantDecisionText(record));
+}
+
+function assistantNumber(record, keys) {
+  const key = keys.find((candidate) => record?.[candidate] !== undefined);
+  return key ? Number(record[key] || 0) : 0;
+}
+
+function requireMcpService(req, res, next) {
+  if (!mcpServiceToken) {
+    return res.status(503).json({ error: 'MCP service authentication is not configured' });
+  }
+  if (req.get('X-MCP-Service-Token') !== mcpServiceToken) {
+    return res.status(401).json({ error: 'Unauthorized MCP service request' });
+  }
+  return next();
 }
 
 function findRequestedApp(question, records) {
@@ -190,6 +206,88 @@ async function answerAssistantQuestion(question) {
   };
 }
 
+async function answerWithMonitoringAgent(messages) {
+  const response = await fetch(assistantAgentUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Monitoring agent returned ${response.status}`);
+  }
+  if (typeof payload.answer !== 'string' || !payload.answer.trim()) {
+    throw new Error('Monitoring agent returned an invalid response');
+  }
+  return { ...payload, source: payload.source || 'openai-mcp' };
+}
+
+async function createAssistantRequest(question, clientId, requester) {
+  const licenses = await recordCollections.onboardedAppLicenses.find({}).limit(500).toArray();
+  const requestedApp = findRequestedApp(question, licenses);
+  const isExplicitRequest = /\b(submit|create|start|request)\b/i.test(question) &&
+    /\b(license|access|seat)\b/i.test(question);
+
+  if (!isExplicitRequest || !requestedApp) return null;
+
+  const requesterName = String(requester?.name || '').trim();
+  const requesterEmail = String(requester?.email || '').trim().toLowerCase();
+  if (!requesterName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requesterEmail)) {
+    const error = new Error('Add your name and work email before submitting a license request.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const requestedLicense = licenses.find(
+    (license) => String(assistantAppName(license)).toLowerCase() === requestedApp.toLowerCase()
+  );
+  const approvingManagerName = String(requestedLicense?.owner || '').trim();
+  const approvingManagerEmail = String(requestedLicense?.ownerEmail || '').trim().toLowerCase();
+  if (!approvingManagerName || !approvingManagerEmail) {
+    const error = new Error(`No app owner is configured for ${requestedApp}. Update the onboarded license first.`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const now = new Date();
+  const request = {
+    clientId: clientId || 'unknown-session',
+    requesterName,
+    requesterEmail,
+    requestedApp,
+    approvingManagerName,
+    approvingManagerEmail,
+    requestText: question,
+    status: 'pending_approval',
+    requestedFor: 'self',
+    createdAt: now,
+    updatedAt: now,
+  };
+  const result = await assistantRequests.insertOne(request);
+  return {
+    id: result.insertedId.toString(),
+    requestedApp,
+    approvingManagerName,
+    status: request.status,
+  };
+}
+
+function serializeLicenseRequest(request) {
+  return {
+    id: request._id.toString(),
+    requesterName: request.requesterName || 'Unknown requester',
+    requesterEmail: request.requesterEmail || '',
+    approvingManagerName: request.approvingManagerName || 'Unassigned',
+    approvingManagerEmail: request.approvingManagerEmail || '',
+    requestedApp: request.requestedApp,
+    reason: request.requestText,
+    status: request.status,
+    declineReason: request.declineReason || '',
+    createdAt: request.createdAt,
+  };
+}
+
 function dateTimeFields(value, prefix) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return {};
@@ -229,6 +327,9 @@ function recordId(key, value, index) {
   if (key === 'licensePolicies') return documentId(value?.name || index);
   if (key === 'licensedApps' || key === 'onboardedAppLicenses') {
     return documentId(value?.id || value?.appId || `${value?.appName || 'app'}-${index}`);
+  }
+  if (key === 'managerAssignments') {
+    return documentId(value?.requesterEmail || value?.requesterId || value?.requesterName || index);
   }
   if (key === 'deploymentPolicyRecords') {
     return documentId(
@@ -427,33 +528,168 @@ app.post('/api/assistant/chat', async (req, res) => {
   }
 
   try {
-    const result = await answerAssistantQuestion(latestQuestion);
-    return res.json({ ...result, source: 'database' });
+    const workflow = await createAssistantRequest(
+      latestQuestion,
+      req.get('X-Client-Id'),
+      req.body?.requester
+    );
+    if (workflow) {
+      return res.status(201).json({
+        answer: `Your ${workflow.requestedApp} license request has been submitted for approval. No license has been assigned yet.`,
+        recordsReviewed: 0,
+        source: 'workflow',
+        workflow,
+      });
+    }
+    try {
+      return res.json(await answerWithMonitoringAgent(messages));
+    } catch (agentError) {
+      console.error('Monitoring agent unavailable; using database fallback:', agentError.message);
+      const result = await answerAssistantQuestion(latestQuestion);
+      return res.json({ ...result, source: 'monitoring-agent-fallback' });
+    }
   } catch (error) {
     console.error('Assistant request failed:', error.message);
-    return res.status(500).json({ error: 'Unable to analyze license data right now' });
+    return res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Unable to analyze license data right now',
+    });
+  }
+});
+
+app.get('/api/assistant/requests', async (req, res) => {
+  const clientId = req.get('X-Client-Id');
+  if (!clientId) return res.status(400).json({ error: 'X-Client-Id is required' });
+
+  try {
+    const requests = await assistantRequests
+      .find({ clientId })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .toArray();
+    return res.json({ requests: requests.map(serializeLicenseRequest) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load assistant requests' });
+  }
+});
+
+app.get('/api/license-requests', async (_req, res) => {
+  try {
+    const requests = await assistantRequests.find({}).sort({ createdAt: -1 }).limit(200).toArray();
+    return res.json({ requests: requests.map(serializeLicenseRequest) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load license requests' });
+  }
+});
+
+app.patch('/api/license-requests/:requestId', async (req, res) => {
+  const action = String(req.body?.action || '').toLowerCase();
+  const declineReason = String(req.body?.declineReason || '').trim();
+  if (!['approve', 'decline'].includes(action)) {
+    return res.status(400).json({ error: 'Action must be approve or decline' });
+  }
+  if (action === 'decline' && !declineReason) {
+    return res.status(400).json({ error: 'A decline reason is required' });
+  }
+  if (!ObjectId.isValid(req.params.requestId)) {
+    return res.status(400).json({ error: 'Invalid request ID' });
+  }
+
+  try {
+    const now = new Date();
+    const result = await assistantRequests.findOneAndUpdate(
+      { _id: new ObjectId(req.params.requestId), status: 'pending_approval' },
+      {
+        $set: {
+          status: action === 'approve' ? 'approved' : 'declined',
+          declineReason: action === 'decline' ? declineReason : null,
+          decidedAt: now,
+          updatedAt: now,
+        },
+      },
+      { returnDocument: 'after' }
+    );
+    const updatedRequest = result?.value || result;
+    if (!updatedRequest) return res.status(409).json({ error: 'This request is no longer awaiting approval' });
+    return res.json({ request: serializeLicenseRequest(updatedRequest) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to update license request' });
+  }
+});
+
+app.get('/api/mcp/license-availability', requireMcpService, async (req, res) => {
+  const appName = String(req.query.appName || '').trim();
+  if (!appName) return res.status(400).json({ error: 'appName is required' });
+  try {
+    const [licenses, decisions] = await Promise.all([
+      recordCollections.onboardedAppLicenses.find({}).limit(500).toArray(),
+      recordCollections.completedEvaluationDecisions.find({}).limit(500).toArray(),
+    ]);
+    const matchesApp = (record) => assistantAppName(record).toLowerCase() === appName.toLowerCase();
+    const appLicenses = licenses.filter(matchesApp);
+    const appDecisions = decisions.filter(matchesApp);
+    const totalSeats = appLicenses.reduce((sum, row) => sum + assistantNumber(row, ['totalSeats', 'total_seats', 'seats', 'quantity']), 0);
+    const assignedSeats = appLicenses.reduce((sum, row) => sum + assistantNumber(row, ['assignedSeats', 'assigned_seats', 'usedSeats']), 0);
+    const explicitAvailable = appLicenses.reduce((sum, row) => sum + assistantNumber(row, ['availableSeats', 'available_seats']), 0);
+    const inventoryAvailable = explicitAvailable || Math.max(0, totalSeats - assignedSeats);
+    const reclaimableDecisions = appDecisions.filter(isReclaimableDecision).length;
+    return res.json({ application: appName, inventoryRecords: appLicenses.length, completedDecisions: appDecisions.length, totalSeats, assignedSeats, inventoryAvailable, reclaimableDecisions, potentiallyAvailable: Math.max(inventoryAvailable, reclaimableDecisions) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load license availability' });
+  }
+});
+
+app.get('/api/mcp/reclaimable-summary', requireMcpService, async (_req, res) => {
+  try {
+    const decisions = await recordCollections.completedEvaluationDecisions.find({}).limit(500).toArray();
+    const reclaimable = decisions.filter(isReclaimableDecision);
+    const byApplication = reclaimable.reduce((counts, row) => {
+      const name = assistantAppName(row) || 'Unknown application';
+      counts[name] = (counts[name] || 0) + 1;
+      return counts;
+    }, {});
+    return res.json({ completedDecisionsReviewed: decisions.length, reclaimableDecisionCount: reclaimable.length, byApplication });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load reclaimable summary' });
+  }
+});
+
+app.get('/api/mcp/decision-summary', requireMcpService, async (req, res) => {
+  const appName = String(req.query.appName || '').trim();
+  if (!appName) return res.status(400).json({ error: 'appName is required' });
+  try {
+    const decisions = await recordCollections.completedEvaluationDecisions.find({}).limit(500).toArray();
+    const appDecisions = decisions.filter((row) => assistantAppName(row).toLowerCase() === appName.toLowerCase());
+    const categories = appDecisions.reduce((counts, row) => {
+      const category = assistantDecisionText(row) || 'Unspecified';
+      counts[category] = (counts[category] || 0) + 1;
+      return counts;
+    }, {});
+    return res.json({ application: appName, completedDecisionCount: appDecisions.length, reclaimableDecisionCount: appDecisions.filter(isReclaimableDecision).length, categories });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load decision summary' });
+  }
+});
+
+app.get('/api/mcp/reclaimable-details', requireMcpService, async (req, res) => {
+  const appName = String(req.query.appName || '').trim();
+  if (!appName) return res.status(400).json({ error: 'appName is required' });
+  try {
+    const decisions = await recordCollections.completedEvaluationDecisions.find({}).sort({ completed_date: -1, completed_time: -1 }).limit(500).toArray();
+    const details = decisions
+      .filter((row) => assistantAppName(row).toLowerCase() === appName.toLowerCase() && isReclaimableDecision(row))
+      .slice(0, 50)
+      .map((row) => ({ application: assistantAppName(row) || appName, pcName: row.pcName || row.pc_name || row.device_name || row.device_id || 'Not recorded', decision: assistantDecisionText(row) || 'Reclaimable', completedDate: row.completed_date || null, completedTime: row.completed_time || null, timeZone: row.time_zone || null }));
+    return res.json({ application: appName, reclaimableDecisionCount: details.length, details, excludedFields: ['user identity', 'raw telemetry'] });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load reclaimable details' });
   }
 });
 
 app.post('/api/telemetry', async (req, res) => {
   const payload = req.body;
-  if (!payload || typeof payload !== 'object' || !payload.timestamp) {
-    return res.status(400).json({ error: 'Telemetry must include a timestamp' });
-  }
-  const deviceId = String(payload.device_id || payload.device_name || 'unknown');
   try {
-    await telemetryEvents.updateOne(
-      { device_key: deviceId, timestamp: payload.timestamp },
-      {
-        $setOnInsert: {
-          ...payload,
-          ...dateTimeFields(payload.timestamp, 'recorded'),
-          device_key: deviceId,
-          received_at: new Date(),
-        },
-      },
-      { upsert: true }
-    );
+    validateTelemetryPayload(payload);
+    await persistTelemetry(telemetryEvents, payload, 'http');
     return res.status(201).json({ message: 'Telemetry saved' });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'Unable to save telemetry' });
@@ -465,6 +701,9 @@ app.post('/send-email-summary', async (req, res) => {
 
   if (!subject || !body) {
     return res.status(400).json({ error: 'Missing required fields: subject and body' });
+  }
+  if (!sesClient || !senderEmail || !recipient) {
+    return res.status(503).json({ error: 'Email summaries are not configured' });
   }
 
   try {
@@ -504,7 +743,17 @@ app.post('/send-email-summary', async (req, res) => {
   }
 });
 
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 const PORT = Number(process.env.PORT) || 3000;
+const distPath = resolve(process.cwd(), 'dist');
+
+if (existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (_req, res) => res.sendFile(resolve(distPath, 'index.html')));
+}
 
 async function startServer() {
   await mongoClient.connect();
@@ -513,6 +762,7 @@ async function startServer() {
     reportSettings.collectionName,
     agentConfigurations.collectionName,
     appSettings.collectionName,
+    assistantRequests.collectionName,
     telemetryEvents.collectionName,
   ];
   const existingNames = new Set(
@@ -527,6 +777,7 @@ async function startServer() {
     recordCollections.licensePolicies.createIndex({ name: 1 }, { unique: true }),
     recordCollections.licensedApps.createIndex({ id: 1 }, { unique: true, sparse: true }),
     recordCollections.onboardedAppLicenses.createIndex({ id: 1 }, { unique: true, sparse: true }),
+    recordCollections.managerAssignments.createIndex({ requesterEmail: 1 }, { unique: true, sparse: true }),
     recordCollections.deploymentPolicyRecords.createIndex(
       { target_pc: 1, type: 1, parent_app: 1, app_name: 1 },
       { unique: true }
@@ -537,13 +788,18 @@ async function startServer() {
     agentConfigurations.createIndex({ client_id: 1 }, { sparse: true }),
     reportSettings.createIndex({ client_id: 1 }, { sparse: true }),
     appSettings.createIndex({ client_id: 1 }, { sparse: true }),
+    assistantRequests.createIndex({ clientId: 1, createdAt: -1 }),
   ]);
   await telemetryEvents.createIndex({ device_key: 1, timestamp: 1 }, { unique: true });
   await telemetryEvents.createIndex({ received_at: 1 });
   app.listen(PORT, () => {
     console.log(`Backend server is running at http://localhost:${PORT}`);
     console.log(`MongoDB database: ${database.databaseName}`);
-    console.log(`Sending email summaries to ${recipientEmail} from ${senderEmail}`);
+    console.log(
+      sesClient
+        ? `Sending email summaries to ${recipientEmail} from ${senderEmail}`
+        : 'Email summaries are disabled; configure SES_SOURCE_EMAIL and AWS_REGION to enable them.'
+    );
   });
 }
 

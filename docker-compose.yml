@@ -1,0 +1,16 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: app-usage-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-portal}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-portal_dev}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-app_usage}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
+volumes:
+  rabbitmq-data:

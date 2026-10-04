@@ -5,8 +5,6 @@ import SettingsModal from './components/SettingsModal';
 import RuntimeBreakdown from './components/RuntimeBreakdown';
 import {
   getPortalClientId,
-  getStoredSendEvaluationEmailSetting,
-  SEND_EVALUATION_EMAIL_STORAGE_KEY,
 } from './utils/clientPreferences';
 import {
   DEFAULT_LICENSE_APP_FORM,
@@ -44,8 +42,7 @@ import {
   YAxis,
 } from 'recharts';
 
-const BACKEND_BASE_URL = 'http://localhost:3000';
-const MONITORING_AGENT_BASE_URL = 'http://localhost:3002';
+const BACKEND_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 function getConfigKey(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
@@ -775,8 +772,18 @@ function getTelemetryTimestampMs(payload) {
   return getTimestampMs(payload?.timestamp);
 }
 
+// Legacy HTTP samples store the app rows directly in `usage`. RabbitMQ events
+// wrap the Tracker's original sample in `usage`, so its app rows are nested at
+// `usage.usage`. Support both shapes while the portal has historical data.
+function getUsageEntries(payload) {
+  const usage = payload?.usage;
+  if (Array.isArray(usage)) return usage;
+  if (Array.isArray(usage?.usage)) return usage.usage;
+  return [];
+}
+
 function getTelemetryEvaluationWindowMs(payload) {
-  const firstUsageRow = payload?.usage?.[0] || {};
+  const firstUsageRow = getUsageEntries(payload)[0] || {};
   const startsAt = getTimestampMs(
     payload?.evaluation_window_start_time ||
       payload?.last_reset_time ||
@@ -800,7 +807,7 @@ function getTelemetryEvaluationWindowMs(payload) {
 }
 
 function getTelemetryLastResetMs(payload) {
-  const firstUsageRow = payload?.usage?.[0] || {};
+  const firstUsageRow = getUsageEntries(payload)[0] || {};
   return getTimestampMs(
     payload?.last_reset_time ||
       payload?.evaluation_window_start_time ||
@@ -812,7 +819,7 @@ function getTelemetryLastResetMs(payload) {
 }
 
 function getTelemetryLastResetForAppMs(payload, appName) {
-  const usageEntry = (payload?.usage || []).find(
+  const usageEntry = getUsageEntries(payload).find(
     (entry) => entry.app_name === appName
   );
 
@@ -970,7 +977,7 @@ function getUsageCountersForWindow(history, appName, windowEndsAt, windowSeconds
     const timestampMs = getTelemetryTimestampMs(payload);
     if (timestampMs === null || timestampMs < windowStartsAt) return;
 
-    (payload.usage || []).forEach((entry) => {
+    getUsageEntries(payload).forEach((entry) => {
       if (entry.app_name !== appName) return;
 
       const next = readUsageCounters(entry);
@@ -1109,7 +1116,7 @@ function getAppLastSeenAt(config, appName) {
 
 function getLatestUsageTimestampForApp(history, appName) {
   return history.reduce((latestTimestampMs, payload) => {
-    const usageEntry = (payload.usage || []).find(
+    const usageEntry = getUsageEntries(payload).find(
       (entry) => entry.app_name === appName
     );
     if (!usageEntry) return latestTimestampMs;
@@ -2125,7 +2132,7 @@ function getDetectedPcNamesForUsage(history, appName) {
   const detectedPcNames = new Set();
 
   history.forEach((payload) => {
-    const hasUsage = (payload.usage || []).some(
+    const hasUsage = getUsageEntries(payload).some(
       (entry) =>
         entry.app_name === appName &&
         readUsageCounters(entry).foregroundRuntimeSeconds > 0
@@ -2172,9 +2179,8 @@ export default function App() {
   const [error, setError] = useState('');
   const [emailSummaryStatus, setEmailSummaryStatus] = useState('');
   const [emailSummaryWindowKey, setEmailSummaryWindowKey] = useState(null);
-  const [sendEvaluationEmailEnabled, setSendEvaluationEmailEnabled] = useState(
-    getStoredSendEvaluationEmailSetting
-  );
+  // Email-triggered workflows are intentionally paused while the in-app assistant is the entry point.
+  const [sendEvaluationEmailEnabled] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dispatchingDeviceId, setDispatchingDeviceId] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState('');
@@ -2198,6 +2204,8 @@ export default function App() {
   const [editingPolicyName, setEditingPolicyName] = useState('');
   const [licensedApps, setLicensedApps] = useState([]);
   const [onboardedAppLicenses, setOnboardedAppLicenses] = useState([]);
+  const [licenseRequests, setLicenseRequests] = useState([]);
+  const [licenseApprovalStatus, setLicenseApprovalStatus] = useState('');
   const [onboardAppLicenseForm, setOnboardAppLicenseForm] = useState(
     DEFAULT_ONBOARD_APP_LICENSE_FORM
   );
@@ -2239,8 +2247,12 @@ export default function App() {
         if (!response.ok) throw new Error(`History request failed with status ${response.status}`);
         return response.json();
       }),
+      fetch(`${BACKEND_BASE_URL}/api/license-requests`).then((response) => {
+        if (!response.ok) throw new Error(`License request load failed with status ${response.status}`);
+        return response.json();
+      }),
     ])
-      .then(([savedState, savedTelemetry]) => {
+      .then(([savedState, savedTelemetry, savedLicenseRequests]) => {
         if (savedState.costOverrides) setCostOverrides(savedState.costOverrides);
         if (savedState.config) setConfig(savedState.config);
         if (savedState.lastDeploymentConfig) setLastDeploymentConfig(savedState.lastDeploymentConfig);
@@ -2250,13 +2262,6 @@ export default function App() {
         if (Array.isArray(savedState.licensedApps)) setLicensedApps(savedState.licensedApps);
         if (Array.isArray(savedState.onboardedAppLicenses)) setOnboardedAppLicenses(savedState.onboardedAppLicenses);
         if (savedState.emailSummaryWindowKey) setEmailSummaryWindowKey(savedState.emailSummaryWindowKey);
-        if (typeof savedState.sendEvaluationEmailEnabled === 'boolean') {
-          setSendEvaluationEmailEnabled(savedState.sendEvaluationEmailEnabled);
-          window.localStorage.setItem(
-            SEND_EVALUATION_EMAIL_STORAGE_KEY,
-            String(savedState.sendEvaluationEmailEnabled)
-          );
-        }
         if (savedState.selectedReportTemplateId) setSelectedReportTemplateId(savedState.selectedReportTemplateId);
         if (Array.isArray(savedState.selectedReportDimensions)) setSelectedReportDimensions(savedState.selectedReportDimensions);
         if (Array.isArray(savedState.selectedReportMetrics)) setSelectedReportMetrics(savedState.selectedReportMetrics);
@@ -2267,17 +2272,11 @@ export default function App() {
           setTelemetryHistory(savedTelemetry);
           setLatestTelemetry(savedTelemetry.at(-1) || null);
         }
+        setLicenseRequests(savedLicenseRequests.requests || []);
         setHasLoadedPersistentState(true);
       })
       .catch((err) => setError('Failed to load saved backend data: ' + err.message));
   }, [portalClientId]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      SEND_EVALUATION_EMAIL_STORAGE_KEY,
-      String(sendEvaluationEmailEnabled)
-    );
-  }, [sendEvaluationEmailEnabled]);
 
   useEffect(() => {
     if (!hasLoadedPersistentState) return;
@@ -2360,6 +2359,12 @@ export default function App() {
       title: 'Reporting & Insights Center',
       description:
         'Create executive, audit, FinOps, and AI adoption reports with reusable templates, custom fields, exports, and scheduled distribution.',
+    },
+    'license-approvals': {
+      eyebrow: 'License request governance',
+      title: 'License Approvals',
+      description:
+        'Review requests routed to each app owner or administrator during license onboarding.',
     },
     'ai-assistant': {
       eyebrow: 'Grounded license intelligence',
@@ -2470,7 +2475,7 @@ export default function App() {
     const history = evaluationWindow.history;
 
     history.forEach((payload) => {
-      (payload.usage || []).forEach((entry) => {
+      getUsageEntries(payload).forEach((entry) => {
         const existing = usageMap.get(entry.app_name) || createUsageCounters();
         const next = readUsageCounters(entry);
         usageMap.set(entry.app_name, {
@@ -2518,7 +2523,7 @@ export default function App() {
       ) return;
       completedSampleCount += 1;
 
-      (payload.usage || []).forEach((entry) => {
+      getUsageEntries(payload).forEach((entry) => {
         const current = countersByName.get(entry.app_name) || createUsageCounters();
         const next = readUsageCounters(entry);
         Object.keys(current).forEach((key) => {
@@ -3322,7 +3327,7 @@ export default function App() {
       const bucket = buckets.get(getHourlyEngagementKey(timestampMs));
       if (!bucket) return;
 
-      (payload.usage || []).forEach((usageEntry) => {
+      getUsageEntries(payload).forEach((usageEntry) => {
         const series = seriesByAppName.get(usageEntry.app_name);
         if (!series) return;
 
@@ -4324,37 +4329,11 @@ export default function App() {
     return true;
   };
 
-  const loadConfig = () => {
-    fetch('http://localhost:8080/config')
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Config request failed with status ${response.status}`);
-        }
-        return response.json();
-      })
-      .then((data) => {
-        if (!data.licensed_apps || !Array.isArray(data.licensed_apps)) {
-          throw new Error('Config must include a licensed_apps array.');
-        }
-        if (data.tracked_urls && !Array.isArray(data.tracked_urls)) {
-          throw new Error('tracked_urls must be an array.');
-        }
-        if (data.extensions && !Array.isArray(data.extensions)) {
-          throw new Error('extensions must be an array.');
-        }
-        resetForAgentStartChange(data);
-        setConfig(data);
-        setError('');
-
-      })
-      .catch((err) => {
-        setConfig(null);
-        setError('Failed to fetch config: ' + err.message);
-      });
-  };
-
   const loadTelemetry = () => {
-    fetch('http://localhost:8080/telemetry')
+    // Tracker samples now arrive through RabbitMQ and are persisted by the
+    // portal consumer. The browser must only read from the portal API, never
+    // from a Tracker-local HTTP server on port 8080.
+    fetch(`${BACKEND_BASE_URL}/api/telemetry`)
       .then((response) => {
         if (!response.ok) {
           throw new Error(`Telemetry request failed with status ${response.status}`);
@@ -4362,35 +4341,12 @@ export default function App() {
         return response.json();
       })
       .then((data) => {
-        const agentRestarted = resetForAgentStartChange(data);
-        setLatestTelemetry(data);
+        const history = Array.isArray(data) ? data : [];
+        const latest = history.at(-1) || null;
+        const agentRestarted = latest ? resetForAgentStartChange(latest) : false;
+        setLatestTelemetry(latest);
         setError('');
-
-        if (data?.timestamp && !data.telemetry_pending) {
-          fetch(`${BACKEND_BASE_URL}/api/telemetry`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-          }).catch((err) => setError('Failed to persist telemetry: ' + err.message));
-        }
-
-        setTelemetryHistory((currentHistory) => {
-          if (!data || !data.timestamp) {
-            return currentHistory;
-          }
-          if (data.telemetry_pending) {
-            return currentHistory;
-          }
-
-          const alreadyStored = currentHistory.some(
-            (entry) => entry.timestamp === data.timestamp
-          );
-          if (alreadyStored) {
-            return currentHistory;
-          }
-
-          return agentRestarted ? [data] : [...currentHistory, data];
-        });
+        setTelemetryHistory(agentRestarted ? latest ? [latest] : [] : history);
       })
       .catch((err) => {
         setError('Failed to fetch telemetry: ' + err.message);
@@ -4400,6 +4356,29 @@ export default function App() {
   const resetUsage = () => {
     setTelemetryHistory([]);
     setLatestTelemetry(null);
+  };
+
+  const decideLicenseRequest = async (request, action) => {
+    const declineReason = action === 'decline'
+      ? window.prompt(`Provide a reason for declining ${request.requestedApp}.`)
+      : '';
+    if (action === 'decline' && !declineReason?.trim()) return;
+
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/api/license-requests/${request.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, declineReason }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Unable to update request');
+      setLicenseRequests((current) =>
+        current.map((entry) => entry.id === request.id ? payload.request : entry)
+      );
+      setLicenseApprovalStatus(`${request.requestedApp} request ${action === 'approve' ? 'approved' : 'declined'}.`);
+    } catch (error) {
+      setLicenseApprovalStatus(error.message);
+    }
   };
 
   const handleNavSelection = (event, nextView) => {
@@ -4426,11 +4405,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadConfig();
     loadTelemetry();
 
     const intervalId = window.setInterval(() => {
-      loadConfig();
       loadTelemetry();
     }, 10000);
 
@@ -4450,12 +4427,7 @@ export default function App() {
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        sendEvaluationEmailEnabled={sendEvaluationEmailEnabled}
         onClose={() => setIsSettingsOpen(false)}
-        onEmailSettingChange={(enabled) => {
-          setSendEvaluationEmailEnabled(enabled);
-          if (!enabled) setEmailSummaryStatus('');
-        }}
       />
 
       <main className="main-content">
@@ -4474,12 +4446,8 @@ export default function App() {
             activeView === 'reporting-insights' &&
             error.startsWith('Failed to fetch telemetry:')
           ) && <div className="error-message">{error}</div>}
-        {sendEvaluationEmailEnabled && emailSummaryStatus && (
-          <div className="email-summary-status">{emailSummaryStatus}</div>
-        )}
-
         {activeView === 'ai-assistant' && (
-          <ChatAssistant backendBaseUrl={MONITORING_AGENT_BASE_URL} clientId={portalClientId} />
+          <ChatAssistant backendBaseUrl={BACKEND_BASE_URL} clientId={portalClientId} />
         )}
 
         {activeView === 'unified-dashboard' && (
@@ -4683,6 +4651,53 @@ export default function App() {
             </div>
           </section>
           </>
+        )}
+
+        {activeView === 'license-approvals' && (
+          <section className="panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Requester approval routing</h2>
+                  <p>Each request is routed to the app owner configured during license onboarding.</p>
+                </div>
+                <span className="last-updated">{licenseRequests.length} requests</span>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Requester</th>
+                      <th>Approving manager</th>
+                      <th>Item</th>
+                      <th>Reason</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {licenseRequests.length === 0 ? (
+                      <tr><td colSpan="5">No license requests yet.</td></tr>
+                    ) : licenseRequests.map((request) => (
+                      <tr key={request.id}>
+                        <td><strong>{request.requesterName}</strong><small>{request.requesterEmail}</small></td>
+                        <td><strong>{request.approvingManagerName}</strong><small>{request.approvingManagerEmail}</small></td>
+                        <td>{request.requestedApp}</td>
+                        <td>
+                          {request.reason}
+                          {request.status === 'declined' && <small>Declined: {request.declineReason}</small>}
+                        </td>
+                        <td>
+                          {request.status === 'pending_approval' ? <>
+                            <button className="download-link-button" type="button" onClick={() => decideLicenseRequest(request, 'approve')}>Approve</button>
+                            <button className="download-link-button danger-button" type="button" onClick={() => decideLicenseRequest(request, 'decline')}>Decline</button>
+                          </> : <span className="status-badge">{request.status}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {licenseApprovalStatus && <p className="email-summary-status">{licenseApprovalStatus}</p>}
+            </section>
         )}
 
         {activeView === 'reporting-insights' && (
@@ -4993,19 +5008,6 @@ export default function App() {
                     Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
                   </span>
                 )}
-                <button
-                  className="dispatch-button"
-                  type="button"
-                  disabled={!sendEvaluationEmailEnabled}
-                  title={!sendEvaluationEmailEnabled ? 'Enable evaluation emails in Settings' : undefined}
-                  onClick={() => {
-                    sendEmailSummary().catch((err) => {
-                      setEmailSummaryStatus(`Email send failed: ${err.message}`);
-                    });
-                  }}
-                >
-                  Send Email Summary Now
-                </button>
               </div>
             </div>
 

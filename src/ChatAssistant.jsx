@@ -5,6 +5,7 @@ const SUGGESTED_QUESTIONS = [
   'Which licenses can be reclaimed now?',
   'What are the largest monthly savings opportunities?',
   'Summarize the latest license decisions.',
+  'Submit a request for a Postman license.',
 ];
 
 const WELCOME_MESSAGE = {
@@ -12,17 +13,49 @@ const WELCOME_MESSAGE = {
   content:
     'Hello! I can analyze license inventory, completed evaluation decisions, and recent usage metrics. What would you like to know?',
 };
+const REQUESTER_PROFILE_STORAGE_KEY = 'app-usage-monitoring-requester-profile';
+
+function getRequesterProfile() {
+  try {
+    return JSON.parse(window.localStorage.getItem(REQUESTER_PROFILE_STORAGE_KEY)) || { name: '', email: '' };
+  } catch {
+    return { name: '', email: '' };
+  }
+}
 
 export default function ChatAssistant({ backendBaseUrl, clientId }) {
   const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [draft, setDraft] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
+  const [requests, setRequests] = useState([]);
+  const [requester, setRequester] = useState(getRequesterProfile);
   const messageEndRef = useRef(null);
 
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, isSending]);
+
+  const loadRequests = async () => {
+    try {
+      const response = await fetch(`${backendBaseUrl}/api/assistant/requests`, {
+        headers: { 'X-Client-Id': clientId },
+      });
+      if (!response.ok) throw new Error('Unable to load requests');
+      const payload = await response.json();
+      setRequests(payload.requests || []);
+    } catch {
+      // The chat remains usable if request history is temporarily unavailable.
+    }
+  };
+
+  useEffect(() => {
+    loadRequests();
+  }, [backendBaseUrl, clientId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(REQUESTER_PROFILE_STORAGE_KEY, JSON.stringify(requester));
+  }, [requester]);
 
   const sendMessage = async (messageText) => {
     const content = messageText.trim();
@@ -47,6 +80,7 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
             role,
             content: text,
           })),
+          requester,
         }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -60,8 +94,10 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
           content: payload.answer,
           source: payload.source,
           recordsReviewed: payload.recordsReviewed,
+          workflow: payload.workflow,
         },
       ]);
+      if (payload.workflow) loadRequests();
     } catch (requestError) {
       setError(requestError.message || 'The assistant is temporarily unavailable.');
     } finally {
@@ -91,8 +127,39 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
           ))}
         </div>
         <div className="assistant-scope-note">
-          <strong>Read-only assistant</strong>
-          <p>Answers use decision and usage records. License changes still require approval.</p>
+          <strong>Request workflow</strong>
+          <p>Use “Submit a request for a [app] license” to create an approval-pending request.</p>
+        </div>
+        <div className="assistant-requester-profile">
+          <span>Requester details</span>
+          <input
+            aria-label="Requester name"
+            value={requester.name}
+            onChange={(event) => setRequester((current) => ({ ...current, name: event.target.value }))}
+            placeholder="Your name"
+          />
+          <input
+            aria-label="Requester work email"
+            type="email"
+            value={requester.email}
+            onChange={(event) => setRequester((current) => ({ ...current, email: event.target.value }))}
+            placeholder="you@company.com"
+          />
+        </div>
+        <div className="assistant-request-history">
+          <span>Recent requests</span>
+          {requests.length ? (
+            <ul>
+              {requests.map((request) => (
+                <li key={request.id}>
+                  <strong>{request.requestedApp}</strong>
+                  <small>{request.status.replace('_', ' ')}</small>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No requests in this portal session.</p>
+          )}
         </div>
       </aside>
 
@@ -130,6 +197,8 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
                 <small className="assistant-message-source">
                   {message.source === 'openai-mcp'
                     ? 'AI Agent answer'
+                    : message.source === 'workflow'
+                      ? `Workflow request ${message.workflow?.status?.replace('_', ' ') || 'submitted'}`
                     : message.source === 'monitoring-agent-fallback'
                       ? 'Monitoring-agent fallback from live database context'
                       : 'Database summary'}

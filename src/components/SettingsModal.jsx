@@ -1,8 +1,6 @@
 export default function SettingsModal({
   isOpen,
-  sendEvaluationEmailEnabled,
   onClose,
-  onEmailSettingChange,
 }) {
   if (!isOpen) return null;
 
@@ -26,21 +24,12 @@ export default function SettingsModal({
         </div>
         <div className="settings-option">
           <div>
-            <strong>Send evaluation email</strong>
-            <p>Automatically send the evaluation summary when a window completes.</p>
+            <strong>Workflow entry point</strong>
+            <p>Requests are currently started from the in-app AI Assistant. Email-triggered workflows are paused.</p>
           </div>
-          <label className="settings-switch">
-            <input
-              type="checkbox"
-              checked={sendEvaluationEmailEnabled}
-              onChange={(event) => onEmailSettingChange(event.target.checked)}
-            />
-            <span aria-hidden="true" />
-            <span className="sr-only">{sendEvaluationEmailEnabled ? 'Enabled' : 'Disabled'}</span>
-          </label>
         </div>
         <div className="settings-modal-footer">
-          <span>{sendEvaluationEmailEnabled ? 'Email delivery enabled' : 'Email delivery disabled'}</span>
+          <span>Email integration is deferred.</span>
           <button className="dispatch-button" type="button" onClick={onClose}>Done</button>
         </div>
       </section>
