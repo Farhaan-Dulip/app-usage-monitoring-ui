@@ -3,8 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { pathToFileURL } from 'url';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
-import { MongoClient, ObjectId } from 'mongodb';
+import { ObjectId } from 'mongodb';
+import { createDatabase } from './services/database.js';
 import {
   ensureTelemetryIndexes,
   persistTelemetry,
@@ -34,6 +36,11 @@ app.use(
   })
 );
 app.use(express.json());
+// API responses are per-user state; never let a CDN (CloudFront, Amplify) cache them.
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 
 // Optional local-development fallback; deployed environments use env vars only.
 const configPath = resolve(process.cwd(), 'src', 'app_config.json');
@@ -58,8 +65,8 @@ const recipientEmail = allowedRecipientEmails[0];
 const senderEmail = process.env.SES_SOURCE_EMAIL || appConfig?.ses_source_email;
 const awsRegion = process.env.AWS_REGION || appConfig?.aws_region;
 const sesClient = senderEmail && awsRegion ? new SESClient({ region: awsRegion }) : null;
-const mongoClient = new MongoClient(process.env.MONGO_URI || 'mongodb://localhost:27017');
-const database = mongoClient.db(process.env.MONGO_DATABASE || 'app-usage-monitoring');
+// MongoDB (containers, local dev) or DynamoDB (DATA_STORE=dynamodb, serverless).
+const { database, connect: connectDatabase } = await createDatabase(process.env);
 const telemetryEvents = database.collection('telemetry_events');
 const recordCollections = {
   licensePolicies: database.collection('license_policies'),
@@ -524,13 +531,22 @@ app.get('/api/agent-configurations', async (req, res) => {
   }
 });
 
-app.get('/api/telemetry', async (_req, res) => {
+// ?since=<ISO received_at> returns only samples received after that instant, so
+// pollers fetch increments instead of the full history every time.
+app.get('/api/telemetry', async (req, res) => {
+  const since = req.query.since ? new Date(String(req.query.since)) : null;
+  if (since && Number.isNaN(since.getTime())) {
+    return res.status(400).json({ error: 'since must be an ISO date/time' });
+  }
   try {
     const rows = await telemetryEvents
-      .find({}, { projection: { _id: 0, received_at: 0, device_key: 0 } })
+      .find(since ? { received_at: { $gt: since } } : {}, { projection: { _id: 0, device_key: 0 } })
       .sort({ received_at: 1 })
       .toArray();
-    return res.json(rows);
+    return res.json(rows.map(({ received_at: receivedAt, ...row }) => ({
+      ...row,
+      received_at: receivedAt instanceof Date ? receivedAt.toISOString() : receivedAt,
+    })));
   } catch (error) {
     return res.status(500).json({ error: error.message || 'Unable to load telemetry' });
   }
@@ -800,8 +816,9 @@ if (existsSync(distPath)) {
   app.get('*', (_req, res) => res.sendFile(resolve(distPath, 'index.html')));
 }
 
-async function startServer() {
-  await mongoClient.connect();
+// Connects and prepares collections/indexes once (no-ops on DynamoDB).
+export async function initialize() {
+  await connectDatabase();
   const collectionNames = [
     ...Object.values(recordCollections).map((collection) => collection.collectionName),
     reportSettings.collectionName,
@@ -836,6 +853,10 @@ async function startServer() {
     assistantRequests.createIndex({ clientId: 1, createdAt: -1 }),
   ]);
   await ensureTelemetryIndexes(telemetryEvents);
+}
+
+async function startServer() {
+  await initialize();
   app.listen(PORT, () => {
     console.log(`Backend server is running at http://localhost:${PORT}`);
     console.log(`MongoDB database: ${database.databaseName}`);
@@ -847,7 +868,12 @@ async function startServer() {
   });
 }
 
-startServer().catch((error) => {
-  console.error('Unable to start backend:', error);
-  process.exit(1);
-});
+export { app };
+
+// Listen only when run directly (`node server.js`); the Lambda handler imports it.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer().catch((error) => {
+    console.error('Unable to start backend:', error);
+    process.exit(1);
+  });
+}

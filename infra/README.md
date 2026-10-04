@@ -88,3 +88,58 @@ The Tracker must run in the logged-in user's session (e.g. a Task Scheduler
   port-forward 15672 with Session Manager.
 - Broker deploys stop the old task before starting the new one (shared EFS
   data); Trackers buffer telemetry locally during the ~1-2 minute gap.
+
+---
+
+# Pay-per-use variant: `UsagePocServerless`
+
+A second, independent stack with nothing billed by the hour. The container stack
+above is unaffected; both can run side by side (each has its own data).
+
+```
+Browser --HTTPS + password--> Amplify Hosting (UI) --/api/* proxy--> portal Lambda (Express) --> DynamoDB
+portal Lambda <--function URLs + service token--> AI agent Lambda --> OpenAI
+Laptops (Tracker, TELEMETRY_TRANSPORT=https) --bearer token--> ingest Lambda --> DynamoDB (30-day TTL)
+```
+
+The portal runs the same `server.js` on `DATA_STORE=dynamodb`
+(`services/dynamoDatabase.js` emulates the MongoDB operations the portal uses;
+`test/storeParity.test.js` runs one scenario against both stores). Secrets are
+SSM SecureString parameters under `/usage-poc-sls/` (free tier); only the
+Amplify password is in Secrets Manager because CloudFormation must read it.
+
+## Deploy
+
+```bash
+bash infra/scripts/setup-serverless-secrets.sh        # once: tokens + OpenAI placeholder
+(cd infra && npx cdk deploy UsagePocServerless)
+bash infra/scripts/deploy-serverless-ui.sh            # build + publish the UI to Amplify
+```
+
+Set the OpenAI key from a file you delete afterwards:
+
+```bash
+aws ssm put-parameter --overwrite --type SecureString --name /usage-poc-sls/openai-api-key --value file://openai-key.txt
+```
+
+Lambda functions read parameters at cold start: warm instances keep the old
+value until recycled. To apply a new value now, force fresh instances, e.g.
+`aws lambda update-function-configuration --function-name <AiAgent function> --description "reload secrets"`.
+
+Portal login: user `usage-poc`, password in the Secrets Manager secret named in
+the `PortalLogin` stack output.
+
+## Laptops
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-aws-poc.ps1 -Target Serverless
+```
+
+(from the Tracker repo; re-run without `-Target` to switch back to RabbitMQ).
+
+## Cost when idle
+
+DynamoDB on-demand, Lambda, Amplify Hosting and SSM standard parameters bill
+only for use; idle cost is about $0.40/month (the Amplify password secret) plus
+log/table storage. `npx cdk destroy UsagePocServerless` removes it, including
+the DynamoDB data.

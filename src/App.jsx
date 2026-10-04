@@ -2170,6 +2170,8 @@ function getModelLicenseBreakdown(extension) {
 export default function App() {
   const portalClientId = useMemo(getPortalClientId, []);
   const agentStartedAtRef = useRef(null);
+  // received_at of the newest stored sample; polls request only newer ones.
+  const lastTelemetryReceivedAtRef = useRef(null);
   const [hasLoadedPersistentState, setHasLoadedPersistentState] = useState(false);
   const [activeView, setActiveView] = useState('unified-dashboard');
   const [config, setConfig] = useState(null);
@@ -2271,6 +2273,8 @@ export default function App() {
         if (Array.isArray(savedTelemetry)) {
           setTelemetryHistory(savedTelemetry);
           setLatestTelemetry(savedTelemetry.at(-1) || null);
+          lastTelemetryReceivedAtRef.current =
+            savedTelemetry.at(-1)?.received_at || lastTelemetryReceivedAtRef.current;
         }
         setLicenseRequests(savedLicenseRequests.requests || []);
         setHasLoadedPersistentState(true);
@@ -4330,10 +4334,11 @@ export default function App() {
   };
 
   const loadTelemetry = () => {
-    // Tracker samples now arrive through RabbitMQ and are persisted by the
-    // portal consumer. The browser must only read from the portal API, never
-    // from a Tracker-local HTTP server on port 8080.
-    fetch(`${BACKEND_BASE_URL}/api/telemetry`)
+    // Tracker samples arrive through the portal backend (RabbitMQ worker or the
+    // HTTPS ingest function). After the first load, poll only for samples
+    // received since the newest one already held.
+    const since = lastTelemetryReceivedAtRef.current;
+    fetch(`${BACKEND_BASE_URL}/api/telemetry${since ? `?since=${encodeURIComponent(since)}` : ''}`)
       .then((response) => {
         if (!response.ok) {
           throw new Error(`Telemetry request failed with status ${response.status}`);
@@ -4341,12 +4346,20 @@ export default function App() {
         return response.json();
       })
       .then((data) => {
-        const history = Array.isArray(data) ? data : [];
-        const latest = history.at(-1) || null;
-        const agentRestarted = latest ? resetForAgentStartChange(latest) : false;
-        setLatestTelemetry(latest);
+        const incoming = Array.isArray(data) ? data : [];
         setError('');
-        setTelemetryHistory(agentRestarted ? latest ? [latest] : [] : history);
+        if (since && incoming.length === 0) return;
+        lastTelemetryReceivedAtRef.current = incoming.at(-1)?.received_at || since;
+        const latest = incoming.at(-1) || null;
+        const agentRestarted = latest ? resetForAgentStartChange(latest) : false;
+        setLatestTelemetry((current) => latest || current);
+        setTelemetryHistory((current) => {
+          if (agentRestarted) return latest ? [latest] : [];
+          if (!since) return incoming;
+          const sampleKey = (sample) => `${sample.device_id || sample.device_name}|${sample.timestamp}`;
+          const known = new Set(current.map(sampleKey));
+          return [...current, ...incoming.filter((sample) => !known.has(sampleKey(sample)))];
+        });
       })
       .catch((err) => {
         setError('Failed to fetch telemetry: ' + err.message);

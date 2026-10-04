@@ -53,3 +53,15 @@ Repos: `ui` = app-usage-monitoring-ui (portal + worker), `agent` = app-usage-mon
 | H3 | Agent compiles `.js` beside `.ts` (drift risk); no Dockerfile | agent | **Fixed**: Dockerfile added; in-place JS emit kept (`dist/` still recommended) |
 | H4 | Portal Dockerfile omits `workers/`, `messaging/` | ui `Dockerfile` | **Fixed**: includes worker + messaging, runs as `node` user |
 | H5 | No automated tests in Node repos | ui, agent | **Partly fixed**: portal 12, agent 10, infra 3, Tracker 14 tests |
+
+## Pay-per-use variant (`UsagePocServerless`, 2026-10-05)
+
+| # | Gap | Where | POC handling |
+|---|---|---|---|
+| V1 | Lambda function URLs (portal API, agent, ingest) are public. The portal API can be called directly, bypassing Amplify's password; it has no authentication of its own (S1/S5 apply in full) | infra `usage-poc-serverless-stack.ts` | Accepted for POC (URLs unadvertised). Fix with Cognito/JWT on the API, or IAM-auth URLs behind CloudFront OAC |
+| V2 | Amplify basic auth is one shared username/password | Amplify branch | Accepted; Cognito login planned |
+| V3 | DynamoDB adapter reads whole collections and filters in memory; `PUT /api/state` does a read + conditional write per record | ui `services/dynamoDatabase.js` | Fine at POC sizes; redesign access patterns before real data volumes |
+| V4 | One ingest token shared by all laptops (like the shared RabbitMQ `tracker` password) | SSM `/usage-poc-sls/ingest-token` | Per-device tokens before wider rollout |
+| V5 | Local `.env` in the portal repo holds long-lived AWS access keys (SES); dotenv loads them into any local server run | ui `.env` (git-ignored) | Rotate/remove; use an AWS profile or role instead |
+| R5 | `GET /api/telemetry` full download every poll | ui `server.js`, `App.jsx` | **Fixed** on both variants: `?since=` incremental polling |
+

@@ -10,10 +10,13 @@
     "start:server": "node server.js",
     "start:telemetry-consumer": "node workers/telemetryConsumer.js",
     "migrate:mongo": "node scripts/migrate-mongo.js",
-    "test": "node --test"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-ses": "^3.500.0",
+    "@aws-sdk/client-ssm": "^3.1146.0",
+    "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "amqplib": "^0.10.8",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -21,7 +24,8 @@
     "mongodb": "^7.6.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "recharts": "^2.15.0"
+    "recharts": "^2.15.0",
+    "serverless-http": "^3.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.5.1",
