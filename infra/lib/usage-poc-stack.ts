@@ -29,6 +29,9 @@ export interface UsagePocStackProps extends cdk.StackProps {
   brokerTlsSecretArn: string;
   /** Name in the broker certificate; Trackers set RABBITMQ_TLS_SERVER_NAME to it. */
   brokerTlsServerName: string;
+  /** Kept outside the stack so `cdk destroy` / redeploy keeps the values. */
+  mongoUriSecretArn: string;
+  openAiKeySecretArn: string;
   alarmEmail?: string;
 }
 
@@ -72,15 +75,7 @@ export class UsagePocStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------- secrets
-    // Placeholders are replaced out-of-band (aws secretsmanager put-secret-value)
-    // so real values never appear in templates, the repo or chat.
-    const placeholderSecret = (id: string, name: string, description: string) =>
-      new secretsmanager.Secret(this, id, {
-        secretName: name,
-        description,
-        secretStringValue: cdk.SecretValue.unsafePlainText('REPLACE_ME'),
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      });
+    // Generated per deployment; rotated by each redeploy.
     const generatedSecret = (id: string, name: string, description: string) =>
       new secretsmanager.Secret(this, id, {
         secretName: name,
@@ -89,8 +84,12 @@ export class UsagePocStack extends cdk.Stack {
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
 
-    const mongoUri = placeholderSecret('MongoUri', 'usage-poc/mongo-uri', 'MongoDB Atlas connection string');
-    const openAiKey = placeholderSecret('OpenAiKey', 'usage-poc/openai-api-key', 'OpenAI API key for the AI agent');
+    // Hand-entered values live outside the stack so a teardown keeps them.
+    if (!props.mongoUriSecretArn || !props.openAiKeySecretArn) {
+      throw new Error('Set context mongoUriSecretArn and openAiKeySecretArn (secrets usage-poc/shared/*).');
+    }
+    const mongoUri = secretsmanager.Secret.fromSecretCompleteArn(this, 'MongoUri', props.mongoUriSecretArn);
+    const openAiKey = secretsmanager.Secret.fromSecretCompleteArn(this, 'OpenAiKey', props.openAiKeySecretArn);
     const serviceToken = generatedSecret('ServiceToken', 'usage-poc/mcp-service-token', 'Portal <-> agent shared token');
     const brokerAdmin = generatedSecret('BrokerAdmin', 'usage-poc/rabbitmq-admin', 'RabbitMQ admin password');
     const brokerTracker = generatedSecret('BrokerTracker', 'usage-poc/rabbitmq-tracker', 'RabbitMQ tracker (laptop) password');

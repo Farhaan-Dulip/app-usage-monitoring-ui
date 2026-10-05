@@ -7,6 +7,8 @@
     "agentRepoPath": "../../app-usage-monitor-agent",
     "brokerTlsSecretArn": "arn:aws:secretsmanager:us-east-1:978387602501:secret:usage-poc/rabbitmq-tls-tuG1qv",
     "brokerTlsServerName": "mq.usage-poc.internal",
-    "alarmEmail": ""
+    "alarmEmail": "",
+    "mongoUriSecretArn": "arn:aws:secretsmanager:us-east-1:978387602501:secret:usage-poc/shared/mongo-uri-OJqMEG",
+    "openAiKeySecretArn": "arn:aws:secretsmanager:us-east-1:978387602501:secret:usage-poc/shared/openai-api-key-KNtPet"
   }
 }

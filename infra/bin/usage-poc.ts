@@ -21,6 +21,8 @@ const stack = new UsagePocStack(app, 'UsagePoc', {
   agentRepoPath: path.resolve(__dirname, '..', context('agentRepoPath') || '../../app-usage-monitor-agent'),
   brokerTlsSecretArn: context('brokerTlsSecretArn'),
   brokerTlsServerName: context('brokerTlsServerName') || 'mq.usage-poc.internal',
+  mongoUriSecretArn: context('mongoUriSecretArn'),
+  openAiKeySecretArn: context('openAiKeySecretArn'),
   alarmEmail: context('alarmEmail'),
 });
 
