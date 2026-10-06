@@ -24,6 +24,7 @@ import {
 } from './data/reportingData';
 import appCostData from './app_costs.json';
 import appConfig from './app_config.json';
+import { deriveTrackerConfig } from './utils/trackerConfig';
 import {
   Area,
   AreaChart,
@@ -2174,7 +2175,7 @@ export default function App() {
   const lastTelemetryReceivedAtRef = useRef(null);
   const [hasLoadedPersistentState, setHasLoadedPersistentState] = useState(false);
   const [activeView, setActiveView] = useState('unified-dashboard');
-  const [config, setConfig] = useState(null);
+  const [savedConfig, setConfig] = useState(null);
   const [latestTelemetry, setLatestTelemetry] = useState(null);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
@@ -2293,7 +2294,7 @@ export default function App() {
         },
         body: JSON.stringify({
           costOverrides,
-          config,
+          config: savedConfig,
           lastDeploymentConfig,
           deploymentPolicyRecords,
           completedEvaluationDecisions,
@@ -2315,7 +2316,7 @@ export default function App() {
   }, [
     hasLoadedPersistentState,
     costOverrides,
-    config,
+    savedConfig,
     lastDeploymentConfig,
     deploymentPolicyRecords,
     completedEvaluationDecisions,
@@ -2381,6 +2382,14 @@ export default function App() {
   const currentPcName = useMemo(
     () => getTelemetryPcName(latestTelemetry),
     [latestTelemetry]
+  );
+
+  // Trackers no longer serve their runtime config to the browser (telemetry
+  // goes through the backend), so derive the dashboard's view of it from the
+  // saved deployment records when no stored config exists.
+  const config = useMemo(
+    () => savedConfig || deriveTrackerConfig(deploymentPolicyRecords, lastDeploymentConfig, currentPcName),
+    [savedConfig, deploymentPolicyRecords, lastDeploymentConfig, currentPcName]
   );
 
   const effectiveUsageWindowSeconds =

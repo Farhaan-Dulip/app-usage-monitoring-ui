@@ -2,7 +2,7 @@
   "app": "npx tsx bin/usage-poc.ts",
   "context": {
     "region": "us-east-1",
-    "allowedCidrs": "175.157.62.175/32",
+    "allowedCidrs": "0.0.0.0/0",
     "appsEnabled": true,
     "agentRepoPath": "../../app-usage-monitor-agent",
     "brokerTlsSecretArn": "arn:aws:secretsmanager:us-east-1:978387602501:secret:usage-poc/rabbitmq-tls-tuG1qv",
