@@ -17,11 +17,15 @@ export function parseIpv4Cidr(cidr: string): Ipv4Range {
   return { cidr, start: address - (address % size), size };
 }
 
-// CloudFront Functions (cloudfront-js-2.0) viewer-request handler.
-export function ipAllowListCode(ranges: Ipv4Range[]): string {
+// CloudFront Functions (cloudfront-js-2.0) viewer-request handler. Paths under
+// deniedPathPrefixes are refused for everyone (internal-only endpoints on an
+// origin that has no private network path to keep them off the internet).
+export function ipAllowListCode(ranges: Ipv4Range[], deniedPathPrefixes: string[] = []): string {
   const allowed = JSON.stringify(ranges.map(({ start, size }) => [start, size]));
+  const denied = JSON.stringify(deniedPathPrefixes.map((prefix) => prefix.toLowerCase()));
   return `
 var ALLOWED = ${allowed};
+var DENIED_PATHS = ${denied};
 function toNumber(ip) {
   var parts = String(ip).split('.');
   if (parts.length !== 4) return -1;
@@ -33,16 +37,23 @@ function toNumber(ip) {
   }
   return value;
 }
-function handler(event) {
-  var ip = toNumber(event.viewer.ip);
-  for (var i = 0; i < ALLOWED.length; i++) {
-    if (ip >= ALLOWED[i][0] && ip < ALLOWED[i][0] + ALLOWED[i][1]) return event.request;
-  }
+function deny(message) {
   return {
     statusCode: 403,
     statusDescription: 'Forbidden',
     headers: { 'content-type': { value: 'text/plain' } },
-    body: { encoding: 'text', data: 'This POC portal is restricted to approved networks.' }
+    body: { encoding: 'text', data: message }
   };
+}
+function handler(event) {
+  var uri = String(event.request.uri || '').toLowerCase();
+  for (var d = 0; d < DENIED_PATHS.length; d++) {
+    if (uri.indexOf(DENIED_PATHS[d]) === 0) return deny('Not available through the public endpoint.');
+  }
+  var ip = toNumber(event.viewer.ip);
+  for (var i = 0; i < ALLOWED.length; i++) {
+    if (ip >= ALLOWED[i][0] && ip < ALLOWED[i][0] + ALLOWED[i][1]) return event.request;
+  }
+  return deny('This POC portal is restricted to approved networks.');
 }`;
 }

@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ipAllowListCode, parseIpv4Cidr } from '../lib/ip-allowlist';
 
-function compile(cidrs: string[]) {
-  const code = ipAllowListCode(cidrs.map(parseIpv4Cidr));
+function compile(cidrs: string[], deniedPaths: string[] = []) {
+  const code = ipAllowListCode(cidrs.map(parseIpv4Cidr), deniedPaths);
   return new Function(`${code}; return handler;`)() as (event: unknown) => unknown;
 }
 
@@ -22,6 +22,19 @@ test('allows only listed IPv4 ranges', () => {
 test('denied requests get a 403 response', () => {
   const response = compile(['192.0.2.1'])({ viewer: { ip: '198.51.100.7' }, request: {} }) as { statusCode: number };
   assert.equal(response.statusCode, 403);
+});
+
+test('denied path prefixes are refused even from allowed networks', () => {
+  const handler = compile(['0.0.0.0/0'], ['/api/mcp']);
+  const status = (uri: string) => {
+    const request = { uri };
+    const result = handler({ viewer: { ip: '198.51.100.7' }, request });
+    return result === request ? 200 : (result as { statusCode: number }).statusCode;
+  };
+  assert.equal(status('/api/mcp/tools'), 403);
+  assert.equal(status('/API/MCP'), 403);
+  assert.equal(status('/api/telemetry'), 200);
+  assert.equal(status('/'), 200);
 });
 
 test('normalizes non-aligned CIDRs and rejects bad input', () => {

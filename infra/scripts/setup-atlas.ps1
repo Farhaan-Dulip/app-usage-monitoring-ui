@@ -9,6 +9,11 @@ After a redeploy of the Docker stack (new NAT IP), allow the new IP only:
 
   powershell -ExecutionPolicy Bypass -File infra\scripts\setup-atlas.ps1 -AccessListOnly -NatIp <NatPublicIp output>
 
+The single-server EC2 stack keeps its own entry (a separate comment, so the
+two deployments do not remove each other's IP):
+
+  powershell -ExecutionPolicy Bypass -File infra\scripts\setup-atlas.ps1 -AccessListOnly -NatIp <PublicIp output> -Comment 'usage-poc EC2 instance'
+
 Idempotent: reuses the project, cluster, access-list entry and database user
 if they already exist (the user's password is rotated and re-stored).
 The database password and connection string are never printed.
@@ -23,9 +28,11 @@ param(
   [string]$SecretId = 'usage-poc/shared/mongo-uri',
   [string]$AwsRegion = 'us-east-1',
   # Only update the IP access list (keep the database user and stored secret).
-  [switch]$AccessListOnly
+  [switch]$AccessListOnly,
+  # Access-list entry label; old IPs are replaced only within the same label.
+  [string]$Comment = 'usage-poc AWS NAT gateway'
 )
-$accessComment = 'usage-poc AWS NAT gateway'
+$accessComment = $Comment
 
 $ErrorActionPreference = 'Stop'
 $atlas = 'C:\Program Files (x86)\MongoDB Atlas CLI\atlas.exe'
@@ -75,13 +82,13 @@ if ($watchExit -ne 0) { throw 'Cluster did not become ready.' }
 # Network access: only the current POC NAT gateway -----------------------
 $entries = (Invoke-Atlas @('accessLists', 'list', '--projectId', $projectId)).results
 if (-not ($entries | Where-Object { $_.ipAddress -eq $NatIp })) {
-  Write-Host "Allowing $NatIp (AWS NAT gateway)..."
+  Write-Host "Allowing $NatIp ($accessComment)..."
   Invoke-Atlas @('accessLists', 'create', $NatIp, '--type', 'ipAddress',
     '--projectId', $projectId, '--comment', $accessComment) | Out-Null
 }
 # Remove NAT IPs from earlier deployments (only entries this script created).
 $entries | Where-Object { $_.comment -eq $accessComment -and $_.ipAddress -and $_.ipAddress -ne $NatIp } | ForEach-Object {
-  Write-Host "Removing old NAT IP $($_.ipAddress)..."
+  Write-Host "Removing old IP $($_.ipAddress) ($accessComment)..."
   Invoke-Atlas @('accessLists', 'delete', $_.ipAddress, '--projectId', $projectId, '--force') -AllowFailure | Out-Null
 }
 if ($AccessListOnly) {

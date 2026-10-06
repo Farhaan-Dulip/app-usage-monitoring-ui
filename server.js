@@ -97,6 +97,17 @@ const assistantAgentUrl =
 const assistantAgentTimeoutMs = Number(process.env.ASSISTANT_AGENT_TIMEOUT_MS) || 25000;
 // Shared secret for both directions: portal -> agent chat, agent -> portal MCP tools.
 const mcpServiceToken = process.env.MCP_SERVICE_TOKEN?.trim();
+// Single-server deployment: the portal is published directly (CloudFront origin),
+// so require CloudFront's secret origin header. In-network callers (the AI agent)
+// authenticate with the service token instead. Disabled when unset.
+const originVerifySecret = process.env.ORIGIN_VERIFY_SECRET?.trim();
+if (originVerifySecret) {
+  app.use((req, res, next) => {
+    if (serviceTokenMatches(req.get('X-Origin-Verify'), originVerifySecret)) return next();
+    if (mcpServiceToken && serviceTokenMatches(req.get(SERVICE_TOKEN_HEADER), mcpServiceToken)) return next();
+    return res.status(403).json({ error: 'Forbidden' });
+  });
+}
 
 function assistantAppName(record) {
   return record?.appName || record?.app_name || record?.name || record?.application || '';

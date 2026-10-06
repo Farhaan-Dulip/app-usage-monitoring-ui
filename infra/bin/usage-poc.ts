@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { UsagePocStack } from '../lib/usage-poc-stack';
 import { UsagePocServerlessStack } from '../lib/usage-poc-serverless-stack';
+import { UsagePocEc2Stack } from '../lib/usage-poc-ec2-stack';
 
 const app = new cdk.App();
 const context = (key: string): string => String(app.node.tryGetContext(key) ?? '').trim();
@@ -39,3 +40,22 @@ const serverless = new UsagePocServerlessStack(app, 'UsagePocServerless', {
 });
 cdk.Tags.of(serverless).add('project', 'usage-poc');
 cdk.Tags.of(serverless).add('variant', 'serverless');
+
+// Low-cost Docker variant (one EC2 instance running Docker Compose), deployed independently:
+//   npx cdk deploy UsagePocEc2
+const ec2Stack = new UsagePocEc2Stack(app, 'UsagePocEc2', {
+  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: context('region') || 'us-east-1' },
+  description: 'App usage monitoring POC, low cost: portal, worker, AI agent and RabbitMQ on one EC2 instance',
+  allowedCidrs,
+  portalRepoPath: path.resolve(__dirname, '..', '..'),
+  agentRepoPath: path.resolve(__dirname, '..', context('agentRepoPath') || '../../app-usage-monitor-agent'),
+  brokerTlsSecretArn: context('brokerTlsSecretArn'),
+  brokerTlsServerName: context('brokerTlsServerName') || 'mq.usage-poc.internal',
+  mongoUriSecretArn: context('mongoUriSecretArn'),
+  openAiKeySecretArn: context('openAiKeySecretArn'),
+  // com.amazonaws.global.cloudfront.origin-facing (us-east-1).
+  cloudFrontPrefixListId: context('cloudFrontPrefixListId') || 'pl-3b927c52',
+  instanceType: context('ec2InstanceType') || 't3.small',
+});
+cdk.Tags.of(ec2Stack).add('project', 'usage-poc');
+cdk.Tags.of(ec2Stack).add('variant', 'ec2');

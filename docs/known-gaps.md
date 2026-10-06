@@ -65,3 +65,9 @@ Repos: `ui` = app-usage-monitoring-ui (portal + worker), `agent` = app-usage-mon
 | V5 | Local `.env` in the portal repo holds long-lived AWS access keys (SES); dotenv loads them into any local server run | ui `.env` (git-ignored) | Rotate/remove; use an AWS profile or role instead |
 | R5 | `GET /api/telemetry` full download every poll | ui `server.js`, `App.jsx` | **Fixed** on both variants: `?since=` incremental polling |
 
+## Changes after go-live
+
+| # | Change | Date | Risk / follow-up |
+|---|---|---|---|
+| G1 | Docker portal IP allow-list opened to all IPv4 (`allowedCidrs` = `0.0.0.0/0`) at the user's request, because the ISP rotates the user's IP (4 addresses in 2 days) | 2026-10-07 | The portal has no login (S1), so anyone with the CloudFront URL can read and change data (S5) and use the AI chat. Acceptable only while data is test data. Restore a range, add a password in the CloudFront function, or add Cognito login |
+| G2 | Low-cost single-instance variant `UsagePocEc2` added beside `UsagePoc` | 2026-10-07 | Single point of failure (no rolling deploys; instance replacement on every change causes a few minutes of downtime and drops messages still queued in RabbitMQ). Port 80 is limited to CloudFront's prefix list and the portal requires CloudFront's `X-Origin-Verify` secret, but traffic from CloudFront to the instance is plain HTTP. RabbitMQ 5671 is open to the internet as on `UsagePoc`. Same open allow-list as G1 |
