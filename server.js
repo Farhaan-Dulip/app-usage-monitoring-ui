@@ -18,6 +18,7 @@ import {
   isExplicitLicenseRequest,
 } from './services/assistantMatching.js';
 import { SERVICE_TOKEN_HEADER, serviceTokenMatches } from './services/serviceAuth.js';
+import { LicenseRequestError, onboardedAppNames, submitLicenseRequest } from './services/licenseRequests.js';
 
 dotenv.config();
 
@@ -246,12 +247,18 @@ async function answerAssistantQuestion(question) {
   };
 }
 
-async function answerWithMonitoringAgent(messages) {
+// The requester profile and chat session go with the conversation so the agent
+// can raise a request for this person; the model never chooses who it is for.
+async function answerWithMonitoringAgent(messages, requester, clientId) {
   if (!mcpServiceToken) throw new Error('MCP_SERVICE_TOKEN is not configured');
   const response = await fetch(assistantAgentUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', [SERVICE_TOKEN_HEADER]: mcpServiceToken },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({
+      messages,
+      requester: { name: String(requester?.name || '').trim(), email: String(requester?.email || '').trim() },
+      clientId: clientId || '',
+    }),
     signal: AbortSignal.timeout(assistantAgentTimeoutMs),
   });
   const payload = await response.json().catch(() => ({}));
@@ -269,46 +276,27 @@ async function createAssistantRequest(question, clientId, requester) {
   const requestedApp = findRequestedApp(question, licenses);
   if (!isExplicitLicenseRequest(question) || !requestedApp) return null;
 
-  const requesterName = String(requester?.name || '').trim();
-  const requesterEmail = String(requester?.email || '').trim().toLowerCase();
-  if (!requesterName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requesterEmail)) {
-    const error = new Error('Add your name and work email before submitting a license request.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const requestedLicense = licenses.find(
-    (license) => String(assistantAppName(license)).toLowerCase() === requestedApp.toLowerCase()
-  );
-  const approvingManagerName = String(requestedLicense?.owner || '').trim();
-  const approvingManagerEmail = String(requestedLicense?.ownerEmail || '').trim().toLowerCase();
-  if (!approvingManagerName || !approvingManagerEmail) {
-    const error = new Error(`No app owner is configured for ${requestedApp}. Update the onboarded license first.`);
-    error.statusCode = 409;
-    throw error;
-  }
-
-  const now = new Date();
-  const request = {
-    clientId: clientId || 'unknown-session',
-    requesterName,
-    requesterEmail,
+  const { request, duplicate } = await submitLicenseRequest(assistantRequests, licenses, {
     requestedApp,
-    approvingManagerName,
-    approvingManagerEmail,
+    requesterName: requester?.name,
+    requesterEmail: requester?.email,
     requestText: question,
-    status: 'pending_approval',
-    requestedFor: 'self',
-    createdAt: now,
-    updatedAt: now,
-  };
-  const result = await assistantRequests.insertOne(request);
+    clientId: clientId || 'unknown-session',
+    source: 'chat',
+  });
   return {
-    id: result.insertedId.toString(),
-    requestedApp,
-    approvingManagerName,
+    id: request._id.toString(),
+    requestedApp: request.requestedApp,
+    approvingManagerName: request.approvingManagerName,
     status: request.status,
+    duplicate,
   };
+}
+
+function workflowAnswer(workflow) {
+  return workflow.duplicate
+    ? `You already have a ${workflow.requestedApp} license request waiting for ${workflow.approvingManagerName} to approve. No new request was raised.`
+    : `Your ${workflow.requestedApp} license request has been sent to ${workflow.approvingManagerName} (app owner) for approval. No license has been assigned yet.`;
 }
 
 function serializeLicenseRequest(request) {
@@ -322,6 +310,7 @@ function serializeLicenseRequest(request) {
     reason: request.requestText,
     status: request.status,
     declineReason: request.declineReason || '',
+    source: request.source || 'chat',
     createdAt: request.createdAt,
   };
 }
@@ -581,15 +570,15 @@ app.post('/api/assistant/chat', async (req, res) => {
       req.body?.requester
     );
     if (workflow) {
-      return res.status(201).json({
-        answer: `Your ${workflow.requestedApp} license request has been submitted for approval. No license has been assigned yet.`,
+      return res.status(workflow.duplicate ? 200 : 201).json({
+        answer: workflowAnswer(workflow),
         recordsReviewed: 0,
         source: 'workflow',
         workflow,
       });
     }
     try {
-      return res.json(await answerWithMonitoringAgent(messages));
+      return res.json(await answerWithMonitoringAgent(messages, req.body?.requester, req.get('X-Client-Id')));
     } catch (agentError) {
       console.error('Monitoring agent unavailable; using database fallback:', agentError.message);
       const result = await answerAssistantQuestion(latestQuestion);
@@ -682,6 +671,37 @@ function requiredAppName(req, res) {
   if (!appName) res.status(400).json({ error: 'appName is required' });
   return appName;
 }
+
+// AI agent (email intake and chat): the onboarded apps a request may name, and
+// raising the request itself, routed to the app owner.
+app.get('/api/mcp/onboarded-apps', requireMcpService, async (_req, res) => {
+  try {
+    const licenses = await recordCollections.onboardedAppLicenses.find({}).limit(500).toArray();
+    return res.json({ apps: onboardedAppNames(licenses) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load onboarded apps' });
+  }
+});
+
+app.post('/api/mcp/license-requests', requireMcpService, async (req, res) => {
+  try {
+    const licenses = await recordCollections.onboardedAppLicenses.find({}).limit(500).toArray();
+    const { request, duplicate } = await submitLicenseRequest(assistantRequests, licenses, {
+      requestedApp: req.body?.requestedApp,
+      requesterName: req.body?.requesterName,
+      requesterEmail: req.body?.requesterEmail,
+      requestText: req.body?.reason,
+      sourceMessageId: req.body?.sourceMessageId,
+      source: req.body?.source === 'chat' ? 'chat' : 'email',
+      clientId: typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 200) : undefined,
+    });
+    return res.status(duplicate ? 200 : 201).json({ request: serializeLicenseRequest(request), duplicate });
+  } catch (error) {
+    if (error instanceof LicenseRequestError) return res.status(error.statusCode).json({ error: error.message });
+    console.error('Agent license request failed:', error.message);
+    return res.status(500).json({ error: 'Unable to create license request' });
+  }
+});
 
 app.get('/api/mcp/license-availability', requireMcpService, async (req, res) => {
   const appName = requiredAppName(req, res);
@@ -862,6 +882,7 @@ export async function initialize() {
     reportSettings.createIndex({ client_id: 1 }, { sparse: true }),
     appSettings.createIndex({ client_id: 1 }, { sparse: true }),
     assistantRequests.createIndex({ clientId: 1, createdAt: -1 }),
+    assistantRequests.createIndex({ sourceMessageId: 1 }, { unique: true, sparse: true }),
   ]);
   await ensureTelemetryIndexes(telemetryEvents);
 }

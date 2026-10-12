@@ -65,3 +65,24 @@ test('questions that mention requests do not create requests', () => {
     '',
   ].forEach((question) => assert.ok(!isExplicitLicenseRequest(question), question));
 });
+
+test('plain-language access requests are detected', () => {
+  [
+    'I need access to Postman',
+    'i need a Postman license for API testing',
+    'Can I get a Postman license?',
+    'Could I have access to VS Code please',
+    "I'd like Postman access",
+    'Please give me access to Postman',
+    'I really need a seat for Postman',
+  ].forEach((question) => assert.ok(isExplicitLicenseRequest(question), question));
+});
+
+test('statements about access are not requests', () => {
+  [
+    'I need to know who has access to Postman',
+    'I want to see the Postman license usage',
+    'Who has access to Postman?',
+    'Do I need a license for Postman?',
+  ].forEach((question) => assert.ok(!isExplicitLicenseRequest(question), question));
+});

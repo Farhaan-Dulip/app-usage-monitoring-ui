@@ -48,6 +48,9 @@ const REQUEST_INTENT = [
   /\b(submit|create|raise|open|start|file|place)\s+(a\s+|an\s+|my\s+|new\s+)*(license\s+|access\s+|seat\s+)?request\b/i,
   /\b(i\s+(want|need|would\s+like)\s+to\s+request)\b/i,
   /^(please\s+)?request\s+(a|an|access|one)\b/i,
+  // "I need access to Postman", "Can I get a Postman license", "Please give me
+  // Figma access". Not "I need to know who has access" (verb followed by "to").
+  /\b(i\s+(really\s+)?(need|want|require)|i'?d\s+like|i\s+would\s+like|(can|could|may)\s+i\s+(get|have)|please\s+(give|grant|provide|get)\s+me)\s+(?!to\b)(a\s+|an\s+|the\s+|some\s+)?([\w.+-]+\s+){0,3}(license|licence|access|seat)\b/i,
 ];
 
 // True only for explicit instructions to file a license request, not for

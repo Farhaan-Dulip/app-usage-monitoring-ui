@@ -28,6 +28,7 @@ export interface UsagePocEc2StackProps extends cdk.StackProps {
 const VHOST = 'app_usage';
 const MONGO_DATABASE = 'app-usage-monitoring';
 const COMPOSE_VERSION = 'v2.29.7';
+const GRAPH_MAIL_SECRET = 'usage-poc/shared/graph-mail';
 
 /**
  * Low-cost variant of the Docker deployment: the same four containers under
@@ -162,6 +163,13 @@ export class UsagePocEc2Stack extends cdk.Stack {
     for (const secret of [mongoUri, openAiKey, brokerTls, serviceToken, originVerify, brokerAdmin, brokerTracker, brokerWorker]) {
       secret.grantRead(role);
     }
+    // Optional Microsoft Graph credentials for the agent's email intake. Created
+    // by scripts/setup-graph-mail.ps1 (outside the stack); read at every boot, so
+    // adding it later only needs `systemctl restart usage-poc` on the instance.
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+      resources: [`arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${GRAPH_MAIL_SECRET}-??????`],
+    }));
     for (const image of [portalImage, agentImage, brokerImage]) image.repository.grantPull(role);
     for (const group of Object.values(logGroups)) group.grantWrite(role);
 
@@ -249,6 +257,11 @@ services:
       PORTAL_TOOL_TIMEOUT_MS: "8000"
       OPENAI_API_KEY:
       MCP_SERVICE_TOKEN:
+      GRAPH_TENANT_ID:
+      GRAPH_CLIENT_ID:
+      GRAPH_CLIENT_SECRET:
+      GRAPH_MAILBOX:
+      MAIL_ALLOWED_SENDER_DOMAINS:
     mem_limit: 256m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3002/health || exit 1"]
@@ -279,6 +292,15 @@ export MONGO_URI=$(secret ${mongoUri.secretArn})
 export OPENAI_API_KEY=$(secret ${openAiKey.secretArn})
 export MCP_SERVICE_TOKEN=$(secret ${serviceToken.secretArn})
 export ORIGIN_VERIFY_SECRET=$(secret ${originVerify.secretArn})
+# Email intake stays off until the Graph secret exists.
+if mail=$(secret ${GRAPH_MAIL_SECRET} 2>/dev/null); then
+  export GRAPH_TENANT_ID=$(jq -r .tenantId <<<"$mail")
+  export GRAPH_CLIENT_ID=$(jq -r .clientId <<<"$mail")
+  export GRAPH_CLIENT_SECRET=$(jq -r .clientSecret <<<"$mail")
+  export GRAPH_MAILBOX=$(jq -r .mailbox <<<"$mail")
+  export MAIL_ALLOWED_SENDER_DOMAINS=$(jq -r '.allowedSenderDomains // empty' <<<"$mail")
+fi
+unset mail
 aws ecr get-login-password | docker login --username AWS --password-stdin ${registry}
 cd /opt/usage-poc
 for attempt in 1 2 3 4 5; do docker compose pull --quiet && break; sleep 15; done

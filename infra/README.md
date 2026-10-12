@@ -241,5 +241,7 @@ Operations:
   Elastic IP moves to the new instance, so Atlas and laptops need no change.
   Messages still queued in RabbitMQ at that moment are lost. Laptops only delete
   samples the broker has confirmed, and the worker drains the queue within seconds.
+- Email license requests: optional. See [docs/email-intake.md](../docs/email-intake.md); turn it on with
+  `scripts\setup-graph-mail.ps1` (no redeploy, the containers restart).
 - Shut down: `npx cdk destroy UsagePocEc2 --force` (releases the Elastic IP and
   removes the `usage-poc-ec2/*` secrets; the shared secrets and Atlas data stay).

@@ -5,7 +5,7 @@ const SUGGESTED_QUESTIONS = [
   'Which licenses can be reclaimed now?',
   'What are the largest monthly savings opportunities?',
   'Summarize the latest license decisions.',
-  'Submit a request for a Postman license.',
+  'I need access to Postman.',
 ];
 
 const WELCOME_MESSAGE = {
@@ -128,7 +128,7 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
         </div>
         <div className="assistant-scope-note">
           <strong>Request workflow</strong>
-          <p>Use “Submit a request for a [app] license” to create an approval-pending request.</p>
+          <p>Ask for an app in your own words, e.g. “I need access to Postman”. The request goes to the app owner for approval.</p>
         </div>
         <div className="assistant-requester-profile">
           <span>Requester details</span>

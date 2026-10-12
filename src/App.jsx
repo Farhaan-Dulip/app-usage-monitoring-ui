@@ -4702,7 +4702,10 @@ export default function App() {
                       <tr key={request.id}>
                         <td><strong>{request.requesterName}</strong><small>{request.requesterEmail}</small></td>
                         <td><strong>{request.approvingManagerName}</strong><small>{request.approvingManagerEmail}</small></td>
-                        <td>{request.requestedApp}</td>
+                        <td>
+                          {request.requestedApp}
+                          {request.source === 'email' && <small>Raised by AI agent from email</small>}
+                        </td>
                         <td>
                           {request.reason}
                           {request.status === 'declined' && <small>Declined: {request.declineReason}</small>}
