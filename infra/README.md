@@ -241,6 +241,14 @@ Operations:
   Elastic IP moves to the new instance, so Atlas and laptops need no change.
   Messages still queued in RabbitMQ at that moment are lost. Laptops only delete
   samples the broker has confirmed, and the worker drains the queue within seconds.
+- License approval → Tracker: approving a request with a target PC writes a
+  deployment record and a `device_config_outbox` entry; the worker publishes it
+  to the `tracker.config` exchange (routing key = device ID, durable queue
+  `tracker.config.<device_id>`), and the Tracker adds the app to
+  `monitoring-config.json` and reloads. Pending pushes:
+  `db.device_config_outbox.find({status: 'pending'})`.
+- AI Tools page: sample data until vendor admin credentials are connected with
+  `scripts\setup-ai-tools.ps1` (no redeploy). See [docs/ai-tools.md](../docs/ai-tools.md).
 - Email license requests: optional. See [docs/email-intake.md](../docs/email-intake.md); turn it on with
   `scripts\setup-graph-mail.ps1` (no redeploy, the containers restart).
 - Shut down: `npx cdk destroy UsagePocEc2 --force` (releases the Elastic IP and

@@ -1,3 +1,5 @@
+import { recordDeviceSighting } from './deviceRegistry.js';
+
 const applicationTimeZone = process.env.APP_TIME_ZONE || 'Asia/Colombo';
 
 function dateTimeFields(value, prefix) {
@@ -35,7 +37,9 @@ export function validateTelemetryPayload(payload) {
   return payload;
 }
 
-export async function persistTelemetry(telemetryEvents, payload, source = 'http') {
+// `devices` (optional) is the device register; the sample is stored first, and
+// a register failure is logged rather than losing the sample.
+export async function persistTelemetry(telemetryEvents, payload, source = 'http', { devices, logger = console } = {}) {
   validateTelemetryPayload(payload);
   const deviceId = String(payload.device_id || payload.device_name || 'unknown');
   await telemetryEvents.updateOne(
@@ -51,6 +55,13 @@ export async function persistTelemetry(telemetryEvents, payload, source = 'http'
     },
     { upsert: true }
   );
+  if (devices) {
+    try {
+      await recordDeviceSighting(devices, payload);
+    } catch (error) {
+      logger.error(`Device register update failed for ${deviceId}: ${error.message}`);
+    }
+  }
 }
 
 const INDEX_OPTIONS_CONFLICT = 85;

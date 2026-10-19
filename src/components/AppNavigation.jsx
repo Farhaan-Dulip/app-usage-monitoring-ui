@@ -7,6 +7,8 @@ function NavIcon({ type }) {
     reports: <><path d="M4.5 2.75h5.2L12.5 5.6v7.65h-8z" /><path d="M9.5 2.9v3h2.85" /><path d="M6.25 8.25h4" /><path d="M6.25 10.5h2.5" /><path d="M6.25 12.75h3.25" /></>,
     assistant: <><path d="M3 4.25h10v7H8l-3.25 2v-2H3z" /><path d="M5.5 7.75h.01" /><path d="M8 7.75h.01" /><path d="M10.5 7.75h.01" /></>,
     approvals: <><path d="M4 3.25h8v9.5H4z" /><path d="m6 8 1.25 1.25L10 6.5" /><path d="M6 11.5h4" /></>,
+    inventory: <><path d="M3 4.5 8 2.5l5 2-5 2z" /><path d="M3 4.5v6.5l5 2.25 5-2.25V4.5" /><path d="M8 6.5v6.75" /></>,
+    aitools: <><path d="M8 2.75 9.2 6.3l3.55 1.2L9.2 8.7 8 12.25 6.8 8.7 3.25 7.5 6.8 6.3z" /><path d="M12.25 11.25v2.5M11 12.5h2.5" /></>,
     settings: <><circle cx="8" cy="8" r="2.25" /><path d="M8 2.25v1.2M8 12.55v1.2M2.25 8h1.2M12.55 8h1.2" /><path d="m3.95 3.95.85.85m6.4 6.4.85.85m0-8.1-.85.85m-6.4 6.4-.85.85" /></>,
   };
 
@@ -23,6 +25,7 @@ const navigationItems = [
   ['unified-dashboard', 'dashboard', 'Dashboard'],
   ['dashboard', 'software', 'Software Licsence Management'],
   ['agent-management', 'tracker', 'Tracker Management'],
+  ['apps-inventory', 'inventory', 'Enterprise Apps Inventory'],
   ['reporting-insights', 'reports', 'Reporting & Insights'],
   ['license-approvals', 'approvals', 'License Approvals'],
   ['ai-assistant', 'assistant', 'AI Assistant'],

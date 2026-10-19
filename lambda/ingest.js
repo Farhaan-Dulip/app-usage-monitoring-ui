@@ -11,6 +11,7 @@ import { serviceTokenMatches } from '../services/serviceAuth.js';
 await loadSsmEnv();
 const { database } = await createDatabase(process.env);
 const telemetryEvents = database.collection('telemetry_events');
+const devices = database.collection('devices');
 const MAX_BODY_BYTES = 256 * 1024;
 
 function respond(statusCode, body) {
@@ -32,6 +33,6 @@ export async function handler(event) {
   } catch (error) {
     return respond(400, { error: error instanceof SyntaxError ? 'Body must be JSON' : error.message });
   }
-  await persistTelemetry(telemetryEvents, payload, 'https');
+  await persistTelemetry(telemetryEvents, payload, 'https', { devices });
   return respond(202, { accepted: payload.event_id || payload.timestamp });
 }

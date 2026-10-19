@@ -1,13 +1,15 @@
 // Builds the tracker runtime config the dashboard expects (licensed app names as
 // the Tracker reports them, per-app policies and types, extensions, URLs) from the
-// deployment records saved by the Deploy screen. Uses the current PC's records
-// when it has any, otherwise all records. Returns null when nothing is deployed.
+// deployment records saved by the Deploy screen (or license approvals). With a
+// known reporting PC only its own records count, so a PC with nothing deployed
+// shows nothing; without one (no telemetry yet) all records are used. Returns
+// null when nothing is deployed.
 export function deriveTrackerConfig(deploymentPolicyRecords = [], lastDeploymentConfig = null, pcName = '') {
   const pcKey = String(pcName || '').trim().toLowerCase();
   const forPc = deploymentPolicyRecords.filter(
     (record) => String(record?.target_pc || '').trim().toLowerCase() === pcKey
   );
-  const records = forPc.length > 0 ? forPc : deploymentPolicyRecords;
+  const records = pcKey ? forPc : deploymentPolicyRecords;
   if (records.length === 0) return null;
 
   // The Tracker reports application rows by lower-cased process name.

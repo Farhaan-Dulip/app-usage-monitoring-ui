@@ -29,6 +29,9 @@ const VHOST = 'app_usage';
 const MONGO_DATABASE = 'app-usage-monitoring';
 const COMPOSE_VERSION = 'v2.29.7';
 const GRAPH_MAIL_SECRET = 'usage-poc/shared/graph-mail';
+// Optional admin credentials for the AI Tools page (Claude, Codex, Copilot),
+// created by scripts/setup-ai-tools.ps1; without them the page shows sample data.
+const AI_TOOLS_SECRET = 'usage-poc/shared/ai-tools';
 
 /**
  * Low-cost variant of the Docker deployment: the same four containers under
@@ -93,6 +96,10 @@ export class UsagePocEc2Stack extends cdk.Stack {
     const brokerTls = secretsmanager.Secret.fromSecretCompleteArn(this, 'BrokerTls', props.brokerTlsSecretArn);
     const serviceToken = generatedSecret('ServiceToken', 'usage-poc-ec2/mcp-service-token', 'Portal <-> agent shared token');
     const originVerify = generatedSecret('OriginVerify', 'usage-poc-ec2/origin-verify', 'CloudFront -> portal X-Origin-Verify header');
+    // Connect dialog (AI tool admin APIs): the admin token gates changes; the
+    // key encrypts stored credentials and must stay stable across deploys.
+    const portalAdminToken = generatedSecret('PortalAdminToken', 'usage-poc-ec2/portal-admin-token', 'Portal admin token for connecting vendor admin APIs');
+    const credentialsKey = generatedSecret('CredentialsKey', 'usage-poc-ec2/credentials-key', 'Encryption key for vendor credentials stored by the portal');
     const brokerAdmin = generatedSecret('BrokerAdmin', 'usage-poc-ec2/rabbitmq-admin', 'RabbitMQ admin password');
     const brokerTracker = generatedSecret('BrokerTracker', 'usage-poc-ec2/rabbitmq-tracker', 'RabbitMQ tracker (laptop) password');
     const brokerWorker = generatedSecret('BrokerWorker', 'usage-poc-ec2/rabbitmq-worker', 'RabbitMQ worker password');
@@ -109,7 +116,7 @@ export class UsagePocEc2Stack extends cdk.Stack {
     // browser and portal share CloudFront's address, so CORS never applies.
     const originRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'PortalOriginRequests', {
       comment: 'usage-poc-ec2 portal',
-      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList('X-Client-Id', 'Content-Type', 'Accept'),
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList('X-Client-Id', 'Content-Type', 'Accept', 'X-Admin-Token'),
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
     });
@@ -160,7 +167,7 @@ export class UsagePocEc2Stack extends cdk.Stack {
       // Shell access through Session Manager; no SSH port or key pair.
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')],
     });
-    for (const secret of [mongoUri, openAiKey, brokerTls, serviceToken, originVerify, brokerAdmin, brokerTracker, brokerWorker]) {
+    for (const secret of [mongoUri, openAiKey, brokerTls, serviceToken, originVerify, brokerAdmin, brokerTracker, brokerWorker, portalAdminToken, credentialsKey]) {
       secret.grantRead(role);
     }
     // Optional Microsoft Graph credentials for the agent's email intake. Created
@@ -168,7 +175,9 @@ export class UsagePocEc2Stack extends cdk.Stack {
     // adding it later only needs `systemctl restart usage-poc` on the instance.
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
-      resources: [`arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${GRAPH_MAIL_SECRET}-??????`],
+      resources: [GRAPH_MAIL_SECRET, AI_TOOLS_SECRET].map(
+        (name) => `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${name}-??????`
+      ),
     }));
     for (const image of [portalImage, agentImage, brokerImage]) image.repository.grantPull(role);
     for (const group of Object.values(logGroups)) group.grantWrite(role);
@@ -224,6 +233,18 @@ services:
       MONGO_URI:
       MCP_SERVICE_TOKEN:
       ORIGIN_VERIFY_SECRET:
+      PORTAL_ADMIN_TOKEN:
+      CREDENTIALS_KEY:
+      PUBLIC_PORTAL_URL: ${portalUrl}
+      GITHUB_OAUTH_CLIENT_ID:
+      GITHUB_OAUTH_CLIENT_SECRET:
+      ANTHROPIC_ADMIN_KEY:
+      OPENAI_CODEX_ADMIN_KEY:
+      OPENAI_CODEX_WORKSPACE_ID:
+      CODEX_ANALYTICS_URL:
+      GITHUB_COPILOT_TOKEN:
+      GITHUB_ORG:
+      GITHUB_LOGIN_EMAILS:
     mem_limit: 384m${log('portal')}
 
   worker:
@@ -292,6 +313,8 @@ export MONGO_URI=$(secret ${mongoUri.secretArn})
 export OPENAI_API_KEY=$(secret ${openAiKey.secretArn})
 export MCP_SERVICE_TOKEN=$(secret ${serviceToken.secretArn})
 export ORIGIN_VERIFY_SECRET=$(secret ${originVerify.secretArn})
+export PORTAL_ADMIN_TOKEN=$(secret ${portalAdminToken.secretArn})
+export CREDENTIALS_KEY=$(secret ${credentialsKey.secretArn})
 # Email intake stays off until the Graph secret exists.
 if mail=$(secret ${GRAPH_MAIL_SECRET} 2>/dev/null); then
   export GRAPH_TENANT_ID=$(jq -r .tenantId <<<"$mail")
@@ -301,6 +324,20 @@ if mail=$(secret ${GRAPH_MAIL_SECRET} 2>/dev/null); then
   export MAIL_ALLOWED_SENDER_DOMAINS=$(jq -r '.allowedSenderDomains // empty' <<<"$mail")
 fi
 unset mail
+# AI Tools page: each vendor turns live when its credential is present.
+if tools=$(secret ${AI_TOOLS_SECRET} 2>/dev/null); then
+  export ANTHROPIC_ADMIN_KEY=$(jq -r '.anthropicAdminKey // empty' <<<"$tools")
+  export OPENAI_CODEX_ADMIN_KEY=$(jq -r '.codexAdminKey // empty' <<<"$tools")
+  export OPENAI_CODEX_WORKSPACE_ID=$(jq -r '.codexWorkspaceId // empty' <<<"$tools")
+  export CODEX_ANALYTICS_URL=$(jq -r '.codexAnalyticsUrl // empty' <<<"$tools")
+  export GITHUB_COPILOT_TOKEN=$(jq -r '.githubToken // empty' <<<"$tools")
+  export GITHUB_ORG=$(jq -r '.githubOrg // empty' <<<"$tools")
+  export GITHUB_LOGIN_EMAILS=$(jq -r '.githubLoginEmails // empty' <<<"$tools")
+  # Optional GitHub OAuth app, for "Sign in with GitHub" in the Connect dialog.
+  export GITHUB_OAUTH_CLIENT_ID=$(jq -r '.githubOAuthClientId // empty' <<<"$tools")
+  export GITHUB_OAUTH_CLIENT_SECRET=$(jq -r '.githubOAuthClientSecret // empty' <<<"$tools")
+fi
+unset tools
 aws ecr get-login-password | docker login --username AWS --password-stdin ${registry}
 cd /opt/usage-poc
 for attempt in 1 2 3 4 5; do docker compose pull --quiet && break; sleep 15; done
@@ -389,5 +426,13 @@ UNIT_EOF`,
     new cdk.CfnOutput(this, 'TrackerSecret', { value: brokerTracker.secretName });
     new cdk.CfnOutput(this, 'PublicIp', { value: eip.attrPublicIp, description: 'Add to the MongoDB Atlas IP access list' });
     new cdk.CfnOutput(this, 'InstanceId', { value: instance.instanceId });
+    new cdk.CfnOutput(this, 'PortalAdminTokenSecret', {
+      value: portalAdminToken.secretName,
+      description: 'Connect dialog admin token: aws secretsmanager get-secret-value --secret-id <this> --query SecretString --output text',
+    });
+    new cdk.CfnOutput(this, 'GithubOAuthCallbackUrl', {
+      value: `${portalUrl}/api/integrations/copilot/oauth/callback`,
+      description: 'Authorization callback URL for a GitHub OAuth app (Sign in with GitHub)',
+    });
   }
 }

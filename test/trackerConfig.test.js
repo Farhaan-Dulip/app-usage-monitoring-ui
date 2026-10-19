@@ -23,8 +23,12 @@ test('uses the current PC records with lower-cased app names the Tracker reports
   assert.deepEqual(config.tracked_urls, ['https://example.com']);
 });
 
-test('falls back to all records when the reporting PC has none', () => {
-  const config = deriveTrackerConfig(records, null, 'AT-NB-FARHAND');
+test("a known PC with nothing deployed shows nothing, not other PCs' apps", () => {
+  assert.equal(deriveTrackerConfig(records, null, 'AT-NB-FARHAND'), null);
+});
+
+test('without a reporting PC all records are used', () => {
+  const config = deriveTrackerConfig(records, null, '');
   assert.deepEqual(config.licensed_apps.sort(), ['idea64.exe', 'postman.exe']);
   assert.deepEqual(config.tracked_urls, []);
 });

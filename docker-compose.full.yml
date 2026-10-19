@@ -1,0 +1,112 @@
+# Whole stack on this machine, the same containers as the EC2 deployment:
+# portal (UI + API), telemetry worker, AI agent, RabbitMQ and MongoDB.
+#
+#   docker compose -f docker-compose.full.yml up --build -d
+#   open http://localhost:3000            (portal)
+#   open http://localhost:15672           (RabbitMQ console, portal / portal_dev)
+#   docker compose -f docker-compose.full.yml down       (stop; data is kept)
+#   docker compose -f docker-compose.full.yml down -v    (stop and delete local data)
+#
+# The AI agent reads OPENAI_API_KEY from ../app-usage-monitor-agent/.env
+# (without it, chat answers come from the portal's database fallback).
+# MongoDB and the agent are not published on host ports, so they don't clash
+# with a local mongod (27017) or an agent run with `node index.js` (3002).
+name: usage-local
+
+x-shared-env: &shared
+  NODE_ENV: production
+  MONGO_URI: mongodb://mongo:27017
+  MONGO_DATABASE: app-usage-monitoring
+  APP_TIME_ZONE: Asia/Colombo
+  MCP_SERVICE_TOKEN: ${MCP_SERVICE_TOKEN:-local-dev-service-token}
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    ports:
+      # Local Trackers connect with RABBITMQ_URL=amqp://portal:portal_dev@localhost:5672/app_usage
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-portal}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-portal_dev}
+      RABBITMQ_DEFAULT_VHOST: app_usage
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  portal:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *shared
+      # 5173: the Vite dev server (npm run dev), which proxies /api here.
+      CORS_ORIGIN: http://localhost:3000,http://localhost:5173
+      # Connect dialog (AI Tools / app catalog): admin token and the key that
+      # encrypts stored vendor credentials. Development values; change them here.
+      PORTAL_ADMIN_TOKEN: ${PORTAL_ADMIN_TOKEN:-local-admin-token}
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:-local-dev-credentials-key}
+      PUBLIC_PORTAL_URL: http://localhost:3000
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      ASSISTANT_AGENT_URL: http://ai-agent:3002/api/assistant/chat
+      ASSISTANT_AGENT_TIMEOUT_MS: "25000"
+      TELEMETRY_RETENTION_DAYS: "30"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["node", "workers/telemetryConsumer.js"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *shared
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: ${RABBITMQ_USER:-portal}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-portal_dev}
+      RABBITMQ_VHOST: app_usage
+      TELEMETRY_RETENTION_DAYS: "30"
+
+  ai-agent:
+    build: ../app-usage-monitor-agent
+    restart: unless-stopped
+    env_file:
+      - path: ../app-usage-monitor-agent/.env
+        required: false
+    environment:
+      NODE_ENV: production
+      PORTAL_API_URL: http://portal:3000
+      MCP_SERVICE_TOKEN: ${MCP_SERVICE_TOKEN:-local-dev-service-token}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      AGENT_DEADLINE_MS: "20000"
+      PORTAL_TOOL_TIMEOUT_MS: "8000"
+
+volumes:
+  mongo-data:
+  rabbitmq-data:

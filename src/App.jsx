@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatAssistant from './ChatAssistant';
 import AppNavigation from './components/AppNavigation';
+import AiToolsView, { UserAiTools } from './components/AiToolsView';
+import AppCatalog from './components/AppCatalog';
+import AppNamePicker from './components/AppNamePicker';
+import ReportsInsights from './components/reports/ReportsInsights';
+import CustomReportBuilder from './components/reports/CustomReportBuilder';
+import AppInventoryIcon from './components/AppInventoryIcon';
+import InventoryAppPicker from './components/InventoryAppPicker';
 import SettingsModal from './components/SettingsModal';
 import RuntimeBreakdown from './components/RuntimeBreakdown';
 import {
@@ -26,6 +33,13 @@ import appCostData from './app_costs.json';
 import appConfig from './app_config.json';
 import { deriveTrackerConfig } from './utils/trackerConfig';
 import {
+  buildPortalReclaimPolicy,
+  buildReclaimPolicy,
+  getEvaluationWindowDays,
+  getEvaluationWindowSeconds,
+  getPolicyWindowSeconds,
+} from '../services/reclaimPolicy.js';
+import {
   Area,
   AreaChart,
   Bar,
@@ -44,55 +58,15 @@ import {
 } from 'recharts';
 
 const BACKEND_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const LICENSE_REQUEST_STATUS = {
+  pending_approval: { label: 'Pending approval', className: 'status-observing' },
+  awaiting_device: { label: 'Waiting for device choice', className: 'status-neutral' },
+  approved: { label: 'Accepted', className: 'status-active' },
+  declined: { label: 'Declined', className: 'status-reclaimable' },
+  unknown: { label: 'Unknown', className: 'status-neutral' },
+};
 function getConfigKey(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-}
-
-function buildReclaimPolicy(policy) {
-  return {
-    idle_threshold_seconds: Number(
-      policy.idleThresholdSeconds ??
-        policy.idle_threshold_seconds ??
-        DEFAULT_RECLAIM_POLICY.idle_threshold_seconds
-    ),
-  };
-}
-
-function buildPortalReclaimPolicy(policy, { includeTokenThreshold = false } = {}) {
-  return {
-    evaluation_window_seconds: getEvaluationWindowSeconds(policy),
-    worked_threshold_seconds: getPolicyWindowSeconds(
-      policy.workedThresholdHours,
-      policy
-    ),
-    idle_threshold_seconds: Number(
-      policy.idleThresholdSeconds ??
-        policy.idle_threshold_seconds ??
-        DEFAULT_RECLAIM_POLICY.idle_threshold_seconds
-    ),
-    ...(includeTokenThreshold ? { token_threshold: 0 } : {}),
-  };
-}
-
-function getEvaluationWindowSeconds(policy) {
-  const value = policy.evaluationWindowValue ?? policy.evaluationWindowDays ?? 30;
-  return getPolicyWindowSeconds(value, policy);
-}
-
-function getEvaluationWindowDays(policy) {
-  return getEvaluationWindowSeconds(policy) / (24 * 60 * 60);
-}
-
-function getPolicyWindowSeconds(value, policy) {
-  if (policy.evaluationWindowUnit === 'Minutes') {
-    return value * 60;
-  }
-
-  if (policy.evaluationWindowUnit === 'Hours') {
-    return value * 60 * 60;
-  }
-
-  return value * 24 * 60 * 60;
 }
 
 function formatEvaluationWindow(policy) {
@@ -2209,6 +2183,9 @@ export default function App() {
   const [onboardedAppLicenses, setOnboardedAppLicenses] = useState([]);
   const [licenseRequests, setLicenseRequests] = useState([]);
   const [licenseApprovalStatus, setLicenseApprovalStatus] = useState('');
+  const [deviceOwners, setDeviceOwners] = useState([]);
+  const [deviceOwnerDrafts, setDeviceOwnerDrafts] = useState({});
+  const [deviceOwnerStatus, setDeviceOwnerStatus] = useState('');
   const [onboardAppLicenseForm, setOnboardAppLicenseForm] = useState(
     DEFAULT_ONBOARD_APP_LICENSE_FORM
   );
@@ -2216,6 +2193,7 @@ export default function App() {
   const [licenseAppForm, setLicenseAppForm] = useState(DEFAULT_LICENSE_APP_FORM);
   const [editingInventoryAppId, setEditingInventoryAppId] = useState('');
   const [licenseOnboardingStatus, setLicenseOnboardingStatus] = useState('');
+  const [isAppCatalogOpen, setIsAppCatalogOpen] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState('laptop-dx01');
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [isNavCollapsedAfterSelect, setIsNavCollapsedAfterSelect] = useState(false);
@@ -2237,6 +2215,16 @@ export default function App() {
   });
   const [cloudProviderFilter, setCloudProviderFilter] = useState('All');
   const [cloudRegionFilter, setCloudRegionFilter] = useState('All');
+
+  useEffect(() => {
+    const isSuccessMessage = /\b(added to|updated in|onboarded|removed)\b/i.test(
+      licenseOnboardingStatus
+    );
+    if (!isSuccessMessage) return undefined;
+
+    const timeoutId = window.setTimeout(() => setLicenseOnboardingStatus(''), 4500);
+    return () => window.clearTimeout(timeoutId);
+  }, [licenseOnboardingStatus]);
 
   useEffect(() => {
     Promise.all([
@@ -2353,6 +2341,12 @@ export default function App() {
       description:
         'Monitor endpoint health, active expensive licenses, and redeploy trackers from one operational view.',
     },
+    'apps-inventory': {
+      eyebrow: 'Software catalog',
+      title: 'Enterprise Apps Inventory',
+      description:
+        'The catalog of applications and AI extensions that license onboarding, approvals and trackers draw from.',
+    },
     'cloud-asset-management': {
       eyebrow: 'Cloud FinOps',
       title: 'Cloud Asset Management',
@@ -2364,6 +2358,12 @@ export default function App() {
       title: 'Reporting & Insights Center',
       description:
         'Create executive, audit, FinOps, and AI adoption reports with reusable templates, custom fields, exports, and scheduled distribution.',
+    },
+    'ai-tools': {
+      eyebrow: 'AI subscription intelligence',
+      title: 'AI Tools',
+      description:
+        'Seats, spend, activity and reclaim candidates for Claude, Codex and GitHub Copilot from each vendor admin API.',
     },
     'license-approvals': {
       eyebrow: 'License request governance',
@@ -3193,7 +3193,24 @@ export default function App() {
       0
     ) + onboardedLicenseCost;
 
-    return mockFleetDevices.map((device, index) => ({
+    // Devices that report telemetry (device register) come first, with their
+    // owner's work email; the rest of the list is the demo fleet.
+    const registeredDevices = deviceOwners.map((device) => ({
+      id: `device-${device.deviceId}`,
+      pcName: device.pcName,
+      user: device.ownerEmail || 'Not linked',
+      ownerEmail: device.ownerEmail || '',
+      // The register refreshes last-seen at most every 5 minutes, so allow 15.
+      isLive: Boolean(device.lastSeenAt) && Date.now() - new Date(device.lastSeenAt).getTime() < 15 * 60 * 1000,
+      activeLicenseCount: null,
+      totalLicenseCost: null,
+      agentVersion: 'Tracker',
+      policy: '—',
+      trackedApps: [],
+      registered: true,
+    }));
+
+    return [...registeredDevices, ...mockFleetDevices].map((device, index) => ({
       ...device,
       activeLicenseCount:
         index === 0 ? activeExpensiveLicenses : device.activeLicenseCount,
@@ -3209,7 +3226,7 @@ export default function App() {
             ]
           : device.trackedApps,
     }));
-  }, [onboardedAppLicenses, usageByApp]);
+  }, [deviceOwners, onboardedAppLicenses, usageByApp]);
 
   const selectedDevice = useMemo(
     () =>
@@ -4092,6 +4109,19 @@ export default function App() {
     setPolicyRegistrationStatus(`${policyName} policy removed.`);
   };
 
+  // Back from "Sign in with GitHub" (Connect): open the inventory page and say how it went.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get('integration')) return;
+    if (params.get('view')) setActiveView(params.get('view'));
+    setLicenseOnboardingStatus(
+      params.get('result') === 'connected'
+        ? 'GitHub Copilot connected. Live data appears on the AI Tools page.'
+        : `GitHub Copilot was not connected: ${params.get('message') || 'sign-in failed'}`
+    );
+    window.history.replaceState(null, '', window.location.pathname);
+  }, []);
+
   const handleAddEnterpriseInventoryItem = (event) => {
     event.preventDefault();
 
@@ -4380,6 +4410,58 @@ export default function App() {
     setLatestTelemetry(null);
   };
 
+  // Requests arrive from chat and email at any time: reload them when the
+  // approvals page opens and every 15 s while it shows.
+  useEffect(() => {
+    if (activeView !== 'license-approvals') return undefined;
+    const load = () => {
+      fetch(`${BACKEND_BASE_URL}/api/license-requests`)
+        .then((response) => {
+          if (!response.ok) throw new Error(`License request load failed with status ${response.status}`);
+          return response.json();
+        })
+        .then((payload) => setLicenseRequests(payload.requests || []))
+        .catch((error) => setLicenseApprovalStatus(error.message));
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => clearInterval(timer);
+  }, [activeView]);
+
+  // Device owners panel (Tracker Management).
+  useEffect(() => {
+    if (activeView !== 'agent-management') return;
+    fetch(`${BACKEND_BASE_URL}/api/devices`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Device load failed with status ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => setDeviceOwners(payload.devices || []))
+      .catch((error) => setDeviceOwnerStatus(error.message));
+  }, [activeView]);
+
+  // Empty email clears the admin override (the Tracker-reported user applies again).
+  const saveDeviceOwner = async (device, ownerEmail) => {
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/api/devices/${encodeURIComponent(device.deviceId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ownerEmail }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Unable to update device owner');
+      setDeviceOwners((current) => current.map((entry) => entry.deviceId === device.deviceId ? payload.device : entry));
+      setDeviceOwnerDrafts((current) => {
+        const next = { ...current };
+        delete next[device.deviceId];
+        return next;
+      });
+      setDeviceOwnerStatus(`${device.pcName} now belongs to ${payload.device.ownerEmail || 'no one'}.`);
+    } catch (error) {
+      setDeviceOwnerStatus(error.message);
+    }
+  };
+
   const decideLicenseRequest = async (request, action) => {
     const declineReason = action === 'decline'
       ? window.prompt(`Provide a reason for declining ${request.requestedApp}.`)
@@ -4397,7 +4479,15 @@ export default function App() {
       setLicenseRequests((current) =>
         current.map((entry) => entry.id === request.id ? payload.request : entry)
       );
-      setLicenseApprovalStatus(`${request.requestedApp} request ${action === 'approve' ? 'approved' : 'declined'}.`);
+      const push = payload.configPush;
+      const pushNote = action !== 'approve' || !push
+        ? ''
+        : push.queued
+          ? ` Monitoring config sent to ${push.pcName}; the tracker picks it up when the PC is online.`
+          : push.reason === 'no_device'
+            ? ' No device is on record for the requester, so nothing was sent to a tracker.'
+            : ' The monitoring config could not be queued; deploy it from the Deploy screen.';
+      setLicenseApprovalStatus(`${request.requestedApp} request ${action === 'approve' ? 'accepted' : 'declined'}.${pushNote}`);
     } catch (error) {
       setLicenseApprovalStatus(error.message);
     }
@@ -4468,6 +4558,8 @@ export default function App() {
             activeView === 'reporting-insights' &&
             error.startsWith('Failed to fetch telemetry:')
           ) && <div className="error-message">{error}</div>}
+        {activeView === 'ai-tools' && <AiToolsView />}
+
         {activeView === 'ai-assistant' && (
           <ChatAssistant backendBaseUrl={BACKEND_BASE_URL} clientId={portalClientId} />
         )}
@@ -4499,7 +4591,7 @@ export default function App() {
             <div className="panel-header">
               <div>
                 <h2>Cross-Domain Spend Trend</h2>
-                <p>Six-month cost movement across desktop software, AI agents, and cloud infrastructure.</p>
+                <p>Six-month cost movement across enterprise app licenses and AI tools & agents.</p>
               </div>
             </div>
             <div className="chart-frame unified-trend-frame">
@@ -4544,7 +4636,7 @@ export default function App() {
                   <Legend content={<ChartLegend />} />
                   <Area
                     dataKey="desktopSoftware"
-                    name="Desktop Software"
+                    name="Enterprise App Licenses"
                     stackId="spend"
                     type="monotone"
                     stroke="#2980b9"
@@ -4553,28 +4645,19 @@ export default function App() {
                   />
                   <Area
                     dataKey="aiAgents"
-                    name="AI Agents"
+                    name="AI Tools & Agents"
                     stackId="spend"
                     type="monotone"
                     stroke="#8e44ad"
                     strokeWidth={2.2}
                     fill="url(#aiSpendGradient)"
                   />
-                  <Area
-                    dataKey="cloudInfrastructure"
-                    name="Cloud Infrastructure"
-                    stackId="spend"
-                    type="monotone"
-                    stroke="#27ae60"
-                    strokeWidth={2.2}
-                    fill="url(#cloudSpendGradient)"
-                  />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </section>
 
-          <section className="unified-grid">
+          <section className="unified-grid unified-grid-single">
             <article className="panel compact-panel">
               <div className="panel-header">
                 <div>
@@ -4596,48 +4679,13 @@ export default function App() {
               </div>
             </article>
 
-            <article className="panel compact-panel">
-              <div className="panel-header">
-                <div>
-                  <h2>Utilization Heatmap</h2>
-                  <p>Peak usage windows for license pooling and workload scheduling.</p>
-                </div>
-              </div>
-              <div className="heatmap-wrap">
-                <div className="heatmap-hours">
-                  <span />
-                  {utilizationHeatmapHours.map((hour) => (
-                    <b key={hour}>{hour}:00</b>
-                  ))}
-                </div>
-                {utilizationHeatmapRows.map((row) => (
-                  <div className="heatmap-row" key={row.domain}>
-                    <div className="heatmap-label">
-                      <strong>{row.domain}</strong>
-                      <small>{row.signal}</small>
-                    </div>
-                    {row.values.map((value, index) => (
-                      <span
-                        className="heatmap-cell"
-                        key={`${row.domain}-${utilizationHeatmapHours[index]}`}
-                        style={{ '--intensity': value / 100 }}
-                        title={`${value}% utilization`}
-                      >
-                        {value}
-                      </span>
-                    ))}
-                    <small className="heatmap-decision">{row.decision}</small>
-                  </div>
-                ))}
-              </div>
-            </article>
           </section>
 
           <section className="panel compact-panel">
             <div className="panel-header">
               <div>
                 <h2>Departmental Cost Attribution</h2>
-                <p>Team-level accountability across desktop, cloud, and AI tooling costs.</p>
+                <p>Team-level accountability across enterprise app license and AI tooling costs.</p>
               </div>
             </div>
             <div className="table-wrap attribution-table-wrap">
@@ -4645,9 +4693,8 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Team</th>
-                    <th>Desktop Cost</th>
-                    <th>Cloud Cost</th>
-                    <th>AI Tooling Cost</th>
+                    <th>Enterprise App Cost</th>
+                    <th>AI Tools & Agents Cost</th>
                     <th>Efficiency %</th>
                   </tr>
                 </thead>
@@ -4658,7 +4705,6 @@ export default function App() {
                         <strong>{team.team}</strong>
                       </td>
                       <td>{formatCurrency(team.desktopCost)}</td>
-                      <td>{formatCurrency(team.cloudCost)}</td>
                       <td>{formatCurrency(team.aiToolingCost)}</td>
                       <td>
                         <div className="efficiency-cell">
@@ -4691,13 +4737,15 @@ export default function App() {
                       <th>Requester</th>
                       <th>Approving manager</th>
                       <th>Item</th>
+                      <th>Target device</th>
                       <th>Reason</th>
+                      <th>Status</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {licenseRequests.length === 0 ? (
-                      <tr><td colSpan="5">No license requests yet.</td></tr>
+                      <tr><td colSpan="7">No license requests yet.</td></tr>
                     ) : licenseRequests.map((request) => (
                       <tr key={request.id}>
                         <td><strong>{request.requesterName}</strong><small>{request.requesterEmail}</small></td>
@@ -4707,14 +4755,35 @@ export default function App() {
                           {request.source === 'email' && <small>Raised by AI agent from email</small>}
                         </td>
                         <td>
+                          {request.targetDevice?.pcName
+                            ? <strong>{request.targetDevice.pcName}</strong>
+                            : request.status === 'awaiting_device'
+                              ? <small>Asked requester: {request.candidateDevices.map((device) => device.pcName).join(', ')}</small>
+                              : <span className="muted-value">Not on record</span>}
+                        </td>
+                        <td>
                           {request.reason}
                           {request.status === 'declined' && <small>Declined: {request.declineReason}</small>}
                         </td>
                         <td>
-                          {request.status === 'pending_approval' ? <>
-                            <button className="download-link-button" type="button" onClick={() => decideLicenseRequest(request, 'approve')}>Approve</button>
-                            <button className="download-link-button danger-button" type="button" onClick={() => decideLicenseRequest(request, 'decline')}>Decline</button>
-                          </> : <span className="status-badge">{request.status}</span>}
+                          <span className={`status-badge ${(LICENSE_REQUEST_STATUS[request.status] || LICENSE_REQUEST_STATUS.unknown).className}`}>
+                            {(LICENSE_REQUEST_STATUS[request.status] || LICENSE_REQUEST_STATUS.unknown).label}
+                          </span>
+                        </td>
+                        <td>
+                          {request.status === 'pending_approval' ? (
+                            <label className="filter-control license-decision-control">
+                              <select
+                                aria-label={`Decision for ${request.requesterName}'s ${request.requestedApp} request`}
+                                value=""
+                                onChange={(event) => decideLicenseRequest(request, event.target.value)}
+                              >
+                                <option value="" disabled>Choose action</option>
+                                <option value="approve">Accept</option>
+                                <option value="decline">Decline</option>
+                              </select>
+                            </label>
+                          ) : <span className="muted-value">Decided</span>}
                         </td>
                       </tr>
                     ))}
@@ -4725,7 +4794,9 @@ export default function App() {
             </section>
         )}
 
+
         {activeView === 'reporting-insights' && (
+          <ReportsInsights builder={false ? (
           <>
           <section className="summary-grid report-summary-grid" aria-label="Reporting summary">
             <article className="summary-card">
@@ -4980,6 +5051,7 @@ export default function App() {
             </div>
           </section>
           </>
+          ) : <CustomReportBuilder />} />
         )}
 
         {activeView === 'dashboard' && (
@@ -5923,20 +5995,11 @@ export default function App() {
             >
               <label>
                 <span>App Name</span>
-                <select
-                  name="appId"
+                <InventoryAppPicker
+                  apps={licensedApps.filter((app) => app.appType !== 'Web URL')}
                   value={onboardAppLicenseForm.appId}
-                  onChange={handleOnboardAppLicenseInputChange}
-                >
-                  <option value="">Select inventory app</option>
-                  {licensedApps
-                    .filter((app) => app.appType !== 'Web URL')
-                    .map((app) => (
-                    <option key={app.id} value={app.id}>
-                      {app.appName}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(appId) => handleOnboardAppLicenseInputChange({ target: { name: 'appId', value: appId } })}
+                />
               </label>
               <label>
                 <span>Policy</span>
@@ -5974,8 +6037,11 @@ export default function App() {
                       <tr key={app.id}>
                         <td>
                           <div className="device-identity">
-                            <strong>{app.appName}</strong>
-                            <span>{app.processName}</span>
+                            <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
+                            <div>
+                              <strong>{app.appName}</strong>
+                              <span>{app.processName}</span>
+                            </div>
                           </div>
                         </td>
                         <td>{app.appType}</td>
@@ -6006,189 +6072,6 @@ export default function App() {
                               title="Remove license"
                               type="button"
                               onClick={() => handleRemoveOnboardedLicense(app.id)}
-                            >
-                              <span aria-hidden="true">×</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          <section className="panel license-onboarding-panel">
-            <div className="panel-header">
-              <div>
-                <h2>Enterprise Apps Inventory</h2>
-                <p>Add applications and AI extensions to the inventory catalog used by license onboarding.</p>
-              </div>
-            </div>
-            <form
-              className="deploy-form license-onboarding-form"
-              onSubmit={handleAddEnterpriseInventoryItem}
-            >
-              <label>
-                <span>Type</span>
-                <select
-                  name="appType"
-                  value={licenseAppForm.appType}
-                  onChange={handleLicenseAppInputChange}
-                >
-                  <option>Application</option>
-                  <option>Extension</option>
-                  <option>Web URL</option>
-                </select>
-              </label>
-              {licenseAppForm.appType === 'Web URL' ? (
-                <label>
-                  <span>URL</span>
-                  <input
-                    name="url"
-                    placeholder="google.com"
-                    type="text"
-                    value={licenseAppForm.url}
-                    onChange={handleLicenseAppInputChange}
-                  />
-                </label>
-              ) : (
-                <>
-                  <label>
-                    <span>App Name</span>
-                    <input
-                      name="appName"
-                      placeholder="GitHub Copilot"
-                      type="text"
-                      value={licenseAppForm.appName}
-                      onChange={handleLicenseAppInputChange}
-                    />
-                  </label>
-                  <label>
-                    <span>Process Name</span>
-                    <input
-                      name="processName"
-                      placeholder="code.exe"
-                      type="text"
-                      value={licenseAppForm.processName}
-                      onChange={handleLicenseAppInputChange}
-                    />
-                  </label>
-                </>
-              )}
-              <label>
-                <span>Monthly Cost</span>
-                <input
-                  min="0"
-                  name="monthlyCost"
-                  placeholder="15"
-                  step="0.01"
-                  type="number"
-                  value={licenseAppForm.monthlyCost}
-                  onChange={handleLicenseAppInputChange}
-                />
-              </label>
-              <label>
-                <span>Owner</span>
-                <input
-                  name="owner"
-                  placeholder="Farhan Dulip"
-                  type="text"
-                  value={licenseAppForm.owner}
-                  onChange={handleLicenseAppInputChange}
-                />
-              </label>
-              <label>
-                <span>Owner Email</span>
-                <input
-                  name="ownerEmail"
-                  placeholder="farhan@example.com"
-                  type="email"
-                  value={licenseAppForm.ownerEmail}
-                  onChange={handleLicenseAppInputChange}
-                />
-              </label>
-              {licenseAppForm.appType === 'Extension' && (
-                <>
-                  <label>
-                    <span>Parent App</span>
-                    <select
-                      name="parentApp"
-                      value={licenseAppForm.parentApp}
-                      onChange={handleLicenseAppInputChange}
-                    >
-                      <option value="">Select parent app</option>
-                      {enterpriseParentAppOptions.map((appName) => (
-                        <option key={appName}>{appName}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Subscription</span>
-                    <input
-                      name="subscriptionType"
-                      placeholder="Copilot Business"
-                      type="text"
-                      value={licenseAppForm.subscriptionType}
-                      onChange={handleLicenseAppInputChange}
-                    />
-                  </label>
-                </>
-              )}
-              <button className="deploy-agent-button" type="submit">
-                <span className="action-symbol">+</span>
-                {editingInventoryAppId ? 'Save Inventory' : 'Add Inventory'}
-              </button>
-            </form>
-
-            {licensedApps.length > 0 && (
-              <div className="table-wrap onboarded-license-list">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Inventory Item</th>
-                      <th>Process</th>
-                      <th>Owner</th>
-                      <th>Email</th>
-                      <th>Type</th>
-                      <th>Parent App</th>
-                      <th>Monthly Cost</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {licensedApps.map((app) => (
-                      <tr key={app.id}>
-                        <td>
-                          <div className="device-identity">
-                            <strong>{app.appName}</strong>
-                            <span>{app.appType}</span>
-                          </div>
-                        </td>
-                        <td>{app.appType === 'Web URL' ? app.url : app.processName}</td>
-                        <td>{app.owner}</td>
-                        <td>{app.ownerEmail}</td>
-                        <td>{app.appType}</td>
-                        <td>{app.appType === 'Extension' ? app.parentApp : '-'}</td>
-                        <td>{formatCurrency(app.monthlyCost)}</td>
-                        <td>
-                          <div className="policy-actions">
-                            <button
-                              aria-label={`Edit ${app.appName} inventory item`}
-                              className="policy-icon-button policy-icon-button-edit"
-                              title="Edit inventory item"
-                              type="button"
-                              onClick={() => handleEditInventoryApp(app)}
-                            >
-                              <span aria-hidden="true">✎</span>
-                            </button>
-                            <button
-                              aria-label={`Remove ${app.appName} inventory item`}
-                              className="policy-icon-button policy-icon-button-remove"
-                              title="Remove inventory item"
-                              type="button"
-                              onClick={() => handleRemoveInventoryApp(app.id)}
                             >
                               <span aria-hidden="true">×</span>
                             </button>
@@ -6427,6 +6310,232 @@ export default function App() {
           </>
         )}
 
+        {activeView === 'apps-inventory' && (
+          <section className="panel license-onboarding-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Enterprise Apps Inventory</h2>
+                <p>Add applications and AI extensions to the inventory catalog used by license onboarding.</p>
+              </div>
+              <button
+                aria-expanded={isAppCatalogOpen}
+                aria-haspopup="dialog"
+                aria-label="Open recognised apps catalog"
+                className="app-catalog-launcher"
+                title="Recognised apps catalog"
+                type="button"
+                onClick={() => setIsAppCatalogOpen(true)}
+              >
+                <span className="nine-dot-icon" aria-hidden="true">
+                  <i /><i /><i /><i /><i /><i /><i /><i /><i />
+                </span>
+                <span>Recognised apps</span>
+              </button>
+            </div>
+            <form
+              className="deploy-form license-onboarding-form"
+              onSubmit={handleAddEnterpriseInventoryItem}
+            >
+              <label>
+                <span>Type</span>
+                <select
+                  name="appType"
+                  value={licenseAppForm.appType}
+                  onChange={handleLicenseAppInputChange}
+                >
+                  <option>Application</option>
+                  <option>Extension</option>
+                  <option>Web URL</option>
+                </select>
+              </label>
+              {licenseAppForm.appType === 'Web URL' ? (
+                <label>
+                  <span>URL</span>
+                  <input
+                    name="url"
+                    placeholder="google.com"
+                    type="text"
+                    value={licenseAppForm.url}
+                    onChange={handleLicenseAppInputChange}
+                  />
+                </label>
+              ) : (
+                <>
+                  <div className="app-name-field">
+                    <span>App Name</span>
+                    <AppNamePicker
+                      appType={licenseAppForm.appType}
+                      value={licenseAppForm.appName}
+                      onPick={(entry) => {
+                        // An extension's parent must already be an Application in the inventory.
+                        const parentReady = !entry.parentApp || enterpriseParentAppOptions.includes(entry.parentApp);
+                        setLicenseAppForm((currentForm) => ({
+                          ...currentForm,
+                          appName: entry.appName,
+                          processName: entry.processName || '',
+                          ...(entry.appType === 'Extension'
+                            ? { parentApp: parentReady ? entry.parentApp : '', subscriptionType: entry.subscriptionType || currentForm.subscriptionType }
+                            : {}),
+                        }));
+                        setLicenseOnboardingStatus(
+                          parentReady ? '' : `${entry.appName} runs inside ${entry.parentApp}: add ${entry.parentApp} to the inventory first, then choose it as Parent App.`
+                        );
+                      }}
+                      onTypeName={(appName) => setLicenseAppForm((currentForm) => ({ ...currentForm, appName }))}
+                    />
+                  </div>
+                  <label>
+                    <span>Process Name</span>
+                    <input
+                      name="processName"
+                      placeholder="code.exe"
+                      type="text"
+                      value={licenseAppForm.processName}
+                      onChange={handleLicenseAppInputChange}
+                    />
+                  </label>
+                </>
+              )}
+              <label>
+                <span>Monthly Cost</span>
+                <input
+                  min="0"
+                  name="monthlyCost"
+                  placeholder="15"
+                  step="0.01"
+                  type="number"
+                  value={licenseAppForm.monthlyCost}
+                  onChange={handleLicenseAppInputChange}
+                />
+              </label>
+              <label>
+                <span>Owner</span>
+                <input
+                  name="owner"
+                  placeholder="Farhan Dulip"
+                  type="text"
+                  value={licenseAppForm.owner}
+                  onChange={handleLicenseAppInputChange}
+                />
+              </label>
+              <label>
+                <span>Owner Email</span>
+                <input
+                  name="ownerEmail"
+                  placeholder="farhan@example.com"
+                  type="email"
+                  value={licenseAppForm.ownerEmail}
+                  onChange={handleLicenseAppInputChange}
+                />
+              </label>
+              {licenseAppForm.appType === 'Extension' && (
+                <>
+                  <label>
+                    <span>Parent App</span>
+                    <select
+                      name="parentApp"
+                      value={licenseAppForm.parentApp}
+                      onChange={handleLicenseAppInputChange}
+                    >
+                      <option value="">Select parent app</option>
+                      {enterpriseParentAppOptions.map((appName) => (
+                        <option key={appName}>{appName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Subscription</span>
+                    <input
+                      name="subscriptionType"
+                      placeholder="Copilot Business"
+                      type="text"
+                      value={licenseAppForm.subscriptionType}
+                      onChange={handleLicenseAppInputChange}
+                    />
+                  </label>
+                </>
+              )}
+              <button className="deploy-agent-button" type="submit">
+                <span className="action-symbol">+</span>
+                {editingInventoryAppId ? 'Save Inventory' : 'Add Inventory'}
+              </button>
+            </form>
+            {licenseOnboardingStatus && (
+              <p className="deployment-status inventory-form-status" role="status">{licenseOnboardingStatus}</p>
+            )}
+
+            {licensedApps.length > 0 && (
+              <div className="table-wrap onboarded-license-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Inventory Item</th>
+                      <th>Process</th>
+                      <th>Owner</th>
+                      <th>Email</th>
+                      <th>Type</th>
+                      <th>Parent App</th>
+                      <th>Monthly Cost</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {licensedApps.map((app) => (
+                      <tr key={app.id}>
+                        <td>
+                          <div className="device-identity">
+                            <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
+                            <div>
+                              <strong>{app.appName}</strong>
+                              <span>{app.appType}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{app.appType === 'Web URL' ? app.url : app.processName}</td>
+                        <td>{app.owner}</td>
+                        <td>{app.ownerEmail}</td>
+                        <td>{app.appType}</td>
+                        <td>{app.appType === 'Extension' ? app.parentApp : '-'}</td>
+                        <td>{formatCurrency(app.monthlyCost)}</td>
+                        <td>
+                          <div className="policy-actions">
+                            <button
+                              aria-label={`Edit ${app.appName} inventory item`}
+                              className="policy-icon-button policy-icon-button-edit"
+                              title="Edit inventory item"
+                              type="button"
+                              onClick={() => handleEditInventoryApp(app)}
+                            >
+                              <span aria-hidden="true">✎</span>
+                            </button>
+                            <button
+                              aria-label={`Remove ${app.appName} inventory item`}
+                              className="policy-icon-button policy-icon-button-remove"
+                              title="Remove inventory item"
+                              type="button"
+                              onClick={() => handleRemoveInventoryApp(app.id)}
+                            >
+                              <span aria-hidden="true">×</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeView === 'apps-inventory' && (
+          <AppCatalog
+            inventory={licensedApps}
+            isOpen={isAppCatalogOpen}
+            onClose={() => setIsAppCatalogOpen(false)}
+          />
+        )}
+
         {activeView === 'agent-management' && showAgentDetails && selectedDevice && (
             <section className="panel detail-panel">
               <div className="panel-header">
@@ -6641,6 +6750,7 @@ export default function App() {
                   </div>
                 </div>
               )}
+              {selectedDevice.registered && <UserAiTools email={selectedDevice.ownerEmail} />}
             </section>
         )}
       </main>

@@ -18,7 +18,29 @@ import {
   isExplicitLicenseRequest,
 } from './services/assistantMatching.js';
 import { SERVICE_TOKEN_HEADER, serviceTokenMatches } from './services/serviceAuth.js';
-import { LicenseRequestError, onboardedAppNames, submitLicenseRequest } from './services/licenseRequests.js';
+import {
+  LicenseRequestError,
+  chooseRequestDevice,
+  deviceNamedIn,
+  findAwaitingDeviceRequest,
+  onboardedAppNames,
+  submitLicenseRequest,
+} from './services/licenseRequests.js';
+import { DeviceRegistryError, devicesForEmail, listDevices, setDeviceOwner } from './services/deviceRegistry.js';
+import { queueLicenseGrant } from './services/licenseGrants.js';
+import { aiToolsForUser, clearAiToolsCache, getAiToolsOverview } from './services/aiTools/index.js';
+import { credentialEnv } from './services/aiTools/credentials.js';
+import { createIntegrationsRouter } from './services/aiTools/integrations.js';
+import { buildDashboard, licenseAppList } from './services/reports/dashboards.js';
+import { buildTrackerReport } from './services/reports/trackerReport.js';
+import {
+  PeopleError,
+  buildPeopleReport,
+  getBudgets,
+  importDirectory,
+  parseDirectoryCsv,
+  setBudget,
+} from './services/aiTools/people.js';
 
 dotenv.config();
 
@@ -69,6 +91,14 @@ const sesClient = senderEmail && awsRegion ? new SESClient({ region: awsRegion }
 // MongoDB (containers, local dev) or DynamoDB (DATA_STORE=dynamodb, serverless).
 const { database, connect: connectDatabase } = await createDatabase(process.env);
 const telemetryEvents = database.collection('telemetry_events');
+const devices = database.collection('devices');
+// AI Tools people view: imported directory (employee ID, manager) and budgets.
+const peopleDirectory = database.collection('ai_people_directory');
+// Vendor admin credentials connected from the portal (encrypted).
+const integrationCredentials = database.collection('integration_credentials');
+const aiToolBudgets = database.collection('ai_tool_budgets');
+// Approved licenses waiting to be pushed to Trackers (published by the worker).
+const deviceConfigOutbox = database.collection('device_config_outbox');
 const recordCollections = {
   licensePolicies: database.collection('license_policies'),
   licensedApps: database.collection('licensed_apps'),
@@ -276,27 +306,51 @@ async function createAssistantRequest(question, clientId, requester) {
   const requestedApp = findRequestedApp(question, licenses);
   if (!isExplicitLicenseRequest(question) || !requestedApp) return null;
 
-  const { request, duplicate } = await submitLicenseRequest(assistantRequests, licenses, {
-    requestedApp,
-    requesterName: requester?.name,
-    requesterEmail: requester?.email,
-    requestText: question,
-    clientId: clientId || 'unknown-session',
-    source: 'chat',
-  });
+  const requesterDevices = await devicesForEmail(devices, requester?.email);
+  let result;
+  try {
+    result = await submitLicenseRequest(assistantRequests, licenses, {
+      requestedApp,
+      requesterName: requester?.name,
+      requesterEmail: requester?.email,
+      requestText: question,
+      clientId: clientId || 'unknown-session',
+      source: 'chat',
+      requesterDevices,
+      // "I need access to Postman on AT-NB-01"
+      targetDevice: deviceNamedIn(question, requesterDevices)?.pcName,
+    });
+  } catch (error) {
+    if (error instanceof LicenseRequestError && error.details?.code === 'device_choice_required') {
+      return { deviceChoice: true, requestedApp, devices: error.details.devices, message: error.message };
+    }
+    throw error;
+  }
+  const { request, duplicate } = result;
   return {
     id: request._id.toString(),
     requestedApp: request.requestedApp,
     approvingManagerName: request.approvingManagerName,
     status: request.status,
+    targetDevice: request.targetDevice || null,
     duplicate,
   };
 }
 
 function workflowAnswer(workflow) {
-  return workflow.duplicate
-    ? `You already have a ${workflow.requestedApp} license request waiting for ${workflow.approvingManagerName} to approve. No new request was raised.`
-    : `Your ${workflow.requestedApp} license request has been sent to ${workflow.approvingManagerName} (app owner) for approval. No license has been assigned yet.`;
+  if (workflow.duplicate) {
+    return `You already have a ${workflow.requestedApp} license request waiting for ${workflow.approvingManagerName} to approve. No new request was raised.`;
+  }
+  const device = workflow.targetDevice
+    ? ` for ${workflow.targetDevice.pcName}`
+    : ' (no device is registered to your email yet, so the device is to be confirmed)';
+  return `Your ${workflow.requestedApp} license request${device} has been sent to ${workflow.approvingManagerName} (app owner) for approval. No license has been assigned yet.`;
+}
+
+function deviceChoiceAnswer(choice) {
+  const names = choice.devices.map((device) => device.pcName);
+  return `You have ${names.length} devices: ${names.join(', ')}. Which PC should the ${choice.requestedApp} license go on? ` +
+    `Reply with, for example, "I need access to ${choice.requestedApp} on ${names[0]}".`;
 }
 
 function serializeLicenseRequest(request) {
@@ -311,6 +365,8 @@ function serializeLicenseRequest(request) {
     status: request.status,
     declineReason: request.declineReason || '',
     source: request.source || 'chat',
+    targetDevice: request.targetDevice || null,
+    candidateDevices: request.candidateDevices || [],
     createdAt: request.createdAt,
   };
 }
@@ -569,6 +625,9 @@ app.post('/api/assistant/chat', async (req, res) => {
       req.get('X-Client-Id'),
       req.body?.requester
     );
+    if (workflow?.deviceChoice) {
+      return res.json({ answer: deviceChoiceAnswer(workflow), recordsReviewed: 0, source: 'workflow', deviceChoice: workflow });
+    }
     if (workflow) {
       return res.status(workflow.duplicate ? 200 : 201).json({
         answer: workflowAnswer(workflow),
@@ -646,7 +705,24 @@ app.patch('/api/license-requests/:requestId', async (req, res) => {
     );
     const updatedRequest = result?.value || result;
     if (!updatedRequest) return res.status(409).json({ error: 'This request is no longer awaiting approval' });
-    return res.json({ request: serializeLicenseRequest(updatedRequest) });
+    let configPush = null;
+    if (action === 'approve') {
+      // The decision stands even if the push cannot be queued; the owner can deploy manually.
+      try {
+        const licenses = await recordCollections.onboardedAppLicenses.find({}).limit(500).toArray();
+        configPush = await queueLicenseGrant({
+          outbox: deviceConfigOutbox,
+          deploymentRecords: recordCollections.deploymentPolicyRecords,
+          request: updatedRequest,
+          licenses,
+          now,
+        });
+      } catch (error) {
+        console.error('Queueing the license config push failed:', error.message);
+        configPush = { queued: false, reason: 'error' };
+      }
+    }
+    return res.json({ request: serializeLicenseRequest(updatedRequest), configPush });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to update license request' });
   }
@@ -692,14 +768,208 @@ app.post('/api/mcp/license-requests', requireMcpService, async (req, res) => {
       requesterEmail: req.body?.requesterEmail,
       requestText: req.body?.reason,
       sourceMessageId: req.body?.sourceMessageId,
+      sourceConversationId: req.body?.sourceConversationId,
       source: req.body?.source === 'chat' ? 'chat' : 'email',
       clientId: typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 200) : undefined,
+      requesterDevices: await devicesForEmail(devices, req.body?.requesterEmail),
+      targetDevice: req.body?.targetDevice,
+      awaitDeviceChoice: req.body?.awaitDeviceChoice === true,
     });
     return res.status(duplicate ? 200 : 201).json({ request: serializeLicenseRequest(request), duplicate });
   } catch (error) {
-    if (error instanceof LicenseRequestError) return res.status(error.statusCode).json({ error: error.message });
+    if (error instanceof LicenseRequestError) {
+      return res.status(error.statusCode).json({ error: error.message, ...error.details });
+    }
     console.error('Agent license request failed:', error.message);
     return res.status(500).json({ error: 'Unable to create license request' });
+  }
+});
+
+// Email thread waiting for the requester to name a PC (several devices on record).
+app.get('/api/mcp/license-requests/awaiting-device', requireMcpService, async (req, res) => {
+  try {
+    const request = await findAwaitingDeviceRequest(assistantRequests, req.query.conversationId, req.query.requesterEmail);
+    return res.json({ request: request ? serializeLicenseRequest(request) : null });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load the awaiting request' });
+  }
+});
+
+app.post('/api/mcp/license-requests/:requestId/device', requireMcpService, async (req, res) => {
+  if (!ObjectId.isValid(req.params.requestId)) return res.status(400).json({ error: 'Invalid request ID' });
+  try {
+    const request = await assistantRequests.findOne({ _id: new ObjectId(req.params.requestId) });
+    const requesterEmail = String(req.body?.requesterEmail || '').trim().toLowerCase();
+    if (!request || request.requesterEmail !== requesterEmail) return res.status(404).json({ error: 'Request not found' });
+    const updated = await chooseRequestDevice(assistantRequests, request, req.body?.targetDevice);
+    return res.json({ request: serializeLicenseRequest(updated) });
+  } catch (error) {
+    if (error instanceof LicenseRequestError) {
+      return res.status(error.statusCode).json({ error: error.message, ...error.details });
+    }
+    console.error('Device choice failed:', error.message);
+    return res.status(500).json({ error: 'Unable to update the request' });
+  }
+});
+
+// AI tools (Claude, Codex, Copilot): live from each vendor's admin API when its
+// credential is configured, otherwise sample data in the documented formats.
+// Connectors read deployment values (env) overlaid with portal-connected ones.
+async function aiToolsEnv() {
+  return (await credentialEnv(integrationCredentials, process.env.CREDENTIALS_KEY, process.env)).env;
+}
+
+app.use('/api/integrations', createIntegrationsRouter({ express, collection: integrationCredentials, onChange: clearAiToolsCache }));
+
+// Sample data also covers the real device owners, so tracker pages show how
+// each person's data will look before live credentials are connected.
+async function deviceOwnerIdentities() {
+  const owners = new Map();
+  for (const device of await listDevices(devices)) {
+    if (device.ownerEmail) owners.set(device.ownerEmail, { name: device.ownerEmail, email: device.ownerEmail });
+  }
+  return [...owners.values()];
+}
+
+app.get('/api/ai-tools/overview', async (req, res) => {
+  try {
+    return res.json(await getAiToolsOverview({
+      env: await aiToolsEnv(),
+      refresh: req.query.refresh === '1',
+      sampleIdentities: await deviceOwnerIdentities(),
+    }));
+  } catch (error) {
+    console.error('AI tools overview failed:', error.message);
+    return res.status(500).json({ error: 'Unable to load AI tool data' });
+  }
+});
+
+// Per-person budgets vs month-to-date spend, with directory data and a
+// manager roll-up.
+async function peopleReport(refresh = false) {
+  const overview = await getAiToolsOverview({ env: await aiToolsEnv(), refresh, sampleIdentities: await deviceOwnerIdentities() });
+  const [directoryRows, budgets] = await Promise.all([
+    peopleDirectory.find({}).limit(20000).toArray(),
+    getBudgets(aiToolBudgets),
+  ]);
+  return buildPeopleReport(overview, directoryRows, budgets);
+}
+
+app.get('/api/ai-tools/people', async (req, res) => {
+  try {
+    return res.json(await peopleReport(req.query.refresh === '1'));
+  } catch (error) {
+    console.error('AI tools people report failed:', error.message);
+    return res.status(500).json({ error: 'Unable to load the people report' });
+  }
+});
+
+// { vendor, email ('*' = default), monthlyBudget (null removes an override) }
+app.put('/api/ai-tools/budgets', async (req, res) => {
+  try {
+    await setBudget(aiToolBudgets, req.body || {});
+    return res.json({ budgets: await getBudgets(aiToolBudgets) });
+  } catch (error) {
+    if (error instanceof PeopleError) return res.status(error.statusCode).json({ error: error.message });
+    return res.status(500).json({ error: 'Unable to save the budget' });
+  }
+});
+
+// CSV export from HR or Entra ID: Email plus any of Name, Employee ID,
+// Manager's Name, Manager Email, Department. Rows are upserted by email.
+app.post('/api/ai-tools/directory', express.text({ type: ['text/csv', 'text/plain'], limit: '2mb' }), async (req, res) => {
+  try {
+    const { people, rejectedRows } = parseDirectoryCsv(typeof req.body === 'string' ? req.body : '');
+    const imported = await importDirectory(peopleDirectory, people);
+    return res.json({ imported, rejectedRows });
+  } catch (error) {
+    if (error instanceof PeopleError) return res.status(error.statusCode).json({ error: error.message });
+    console.error('Directory import failed:', error.message);
+    return res.status(500).json({ error: 'Unable to import the directory' });
+  }
+});
+
+// Reports & Insights. Telemetry for the last 30 days is read at most once a
+// minute (the dashboards share it).
+let recentTelemetryCache = { at: 0, events: [] };
+async function recentTelemetry() {
+  if (Date.now() - recentTelemetryCache.at < 60 * 1000) return recentTelemetryCache.events;
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const events = await telemetryEvents
+    .find({ received_at: { $gte: since } }, { projection: { device_key: 1, device_id: 1, device_name: 1, user_upn: 1, timestamp: 1, received_at: 1, recorded_date: 1, usage: 1 } })
+    .limit(100000)
+    .toArray();
+  recentTelemetryCache = { at: Date.now(), events };
+  return events;
+}
+
+app.get('/api/reports/apps', async (_req, res) => {
+  try {
+    const overview = await getAiToolsOverview({ env: await aiToolsEnv(), sampleIdentities: await deviceOwnerIdentities() });
+    return res.json({ apps: licenseAppList(overview) });
+  } catch (error) {
+    console.error('Report app list failed:', error.message);
+    return res.status(500).json({ error: 'Unable to load apps' });
+  }
+});
+
+app.get('/api/reports/apps/:appId', async (req, res) => {
+  try {
+    const identities = await deviceOwnerIdentities();
+    const [overview, events] = await Promise.all([
+      getAiToolsOverview({ env: await aiToolsEnv(), sampleIdentities: identities }),
+      recentTelemetry(),
+    ]);
+    const dashboard = buildDashboard(req.params.appId, { overview, events, identities });
+    if (!dashboard) return res.status(404).json({ error: 'Unknown app' });
+    return res.json(dashboard);
+  } catch (error) {
+    console.error('App dashboard failed:', error.message);
+    return res.status(500).json({ error: 'Unable to build the dashboard' });
+  }
+});
+
+app.get('/api/reports/tracker-usage', async (_req, res) => {
+  try {
+    const [events, deviceList] = await Promise.all([recentTelemetry(), listDevices(devices)]);
+    return res.json(buildTrackerReport(events, deviceList));
+  } catch (error) {
+    console.error('Tracker usage report failed:', error.message);
+    return res.status(500).json({ error: 'Unable to build the tracker report' });
+  }
+});
+
+// One person's AI tool activity (tracker detail page).
+app.get('/api/ai-tools/user', async (req, res) => {
+  const email = String(req.query.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: 'email is required' });
+  try {
+    const report = await peopleReport();
+    const person = report.people.find((row) => row.email === email) || null;
+    const overview = await getAiToolsOverview({ env: await aiToolsEnv(), sampleIdentities: await deviceOwnerIdentities() });
+    return res.json({ email, person, vendors: aiToolsForUser(overview, email) });
+  } catch (error) {
+    console.error('AI tools user lookup failed:', error.message);
+    return res.status(500).json({ error: 'Unable to load AI tool data' });
+  }
+});
+
+// Device register (portal): each device's owner, linked from the Tracker's
+// signed-in work account; an admin can override it.
+app.get('/api/devices', async (_req, res) => {
+  try {
+    return res.json({ devices: await listDevices(devices) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load devices' });
+  }
+});
+
+app.patch('/api/devices/:deviceId', async (req, res) => {
+  try {
+    return res.json({ device: await setDeviceOwner(devices, req.params.deviceId, req.body?.ownerEmail) });
+  } catch (error) {
+    if (error instanceof DeviceRegistryError) return res.status(error.statusCode).json({ error: error.message });
+    return res.status(500).json({ error: 'Unable to update the device owner' });
   }
 });
 
@@ -775,7 +1045,7 @@ app.post('/api/telemetry', async (req, res) => {
   const payload = req.body;
   try {
     validateTelemetryPayload(payload);
-    await persistTelemetry(telemetryEvents, payload, 'http');
+    await persistTelemetry(telemetryEvents, payload, 'http', { devices });
     return res.status(201).json({ message: 'Telemetry saved' });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'Unable to save telemetry' });
@@ -857,6 +1127,11 @@ export async function initialize() {
     appSettings.collectionName,
     assistantRequests.collectionName,
     telemetryEvents.collectionName,
+    devices.collectionName,
+    deviceConfigOutbox.collectionName,
+    peopleDirectory.collectionName,
+    aiToolBudgets.collectionName,
+    integrationCredentials.collectionName,
   ];
   const existingNames = new Set(
     (await database.listCollections({}, { nameOnly: true }).toArray()).map(({ name }) => name)
@@ -883,6 +1158,12 @@ export async function initialize() {
     appSettings.createIndex({ client_id: 1 }, { sparse: true }),
     assistantRequests.createIndex({ clientId: 1, createdAt: -1 }),
     assistantRequests.createIndex({ sourceMessageId: 1 }, { unique: true, sparse: true }),
+    devices.createIndex({ deviceId: 1 }, { unique: true }),
+    deviceConfigOutbox.createIndex({ grantId: 1 }, { unique: true }),
+    deviceConfigOutbox.createIndex({ status: 1, createdAt: 1 }),
+    peopleDirectory.createIndex({ email: 1 }, { unique: true }),
+    aiToolBudgets.createIndex({ vendor: 1, email: 1 }, { unique: true }),
+    integrationCredentials.createIndex({ vendor: 1 }, { unique: true }),
   ]);
   await ensureTelemetryIndexes(telemetryEvents);
 }

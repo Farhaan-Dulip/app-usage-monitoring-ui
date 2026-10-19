@@ -20,7 +20,7 @@ export function connectionUrl(env = process.env) {
 
 // `onClose` runs when the broker connection or channel is lost; the worker uses
 // it to exit so its supervisor (ECS, compose) restarts and reconnects.
-export async function startTelemetryConsumer({ telemetryEvents, logger = console, onClose = () => {} }) {
+export async function startTelemetryConsumer({ telemetryEvents, devices, logger = console, onClose = () => {} }) {
   const connection = await amqp.connect(connectionUrl());
   const channel = await connection.createChannel();
 
@@ -40,7 +40,7 @@ export async function startTelemetryConsumer({ telemetryEvents, logger = console
     try {
       const payload = JSON.parse(message.content.toString('utf8'));
       validateTelemetryPayload(payload);
-      await persistTelemetry(telemetryEvents, payload, 'rabbitmq');
+      await persistTelemetry(telemetryEvents, payload, 'rabbitmq', { devices, logger });
       channel.ack(message);
     } catch (error) {
       const invalidPayload = error instanceof SyntaxError || /Telemetry must|timestamp must/.test(error.message);
