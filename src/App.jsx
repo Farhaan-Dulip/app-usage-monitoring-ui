@@ -5,6 +5,7 @@ import AiToolsView, { UserAiTools } from './components/AiToolsView';
 import AppCatalog from './components/AppCatalog';
 import AppNamePicker from './components/AppNamePicker';
 import ReportsInsights from './components/reports/ReportsInsights';
+import NetworkCanvas from './components/NetworkCanvas';
 import CustomReportBuilder from './components/reports/CustomReportBuilder';
 import AppInventoryIcon from './components/AppInventoryIcon';
 import InventoryAppPicker from './components/InventoryAppPicker';
@@ -4547,6 +4548,7 @@ export default function App({ user = null, onSignOut = null }) {
       <main className="main-content">
         {activeView !== 'ai-assistant' && (
           <header className="hero">
+            <NetworkCanvas className="hero-network" area={6000} maxNodes={45} reach={100} />
             <div>
               <p className="eyebrow">{heroCopy.eyebrow}</p>
               <h1>{heroCopy.title}</h1>

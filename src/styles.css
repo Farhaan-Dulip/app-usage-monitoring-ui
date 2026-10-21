@@ -56,7 +56,7 @@ button {
 
 .top-nav:hover,
 .top-nav:focus-within {
-  width: 320px;
+  width: 300px;
   background: rgba(255, 255, 255, 0.74);
   box-shadow: 0 18px 48px rgba(20, 33, 61, 0.16);
 }
@@ -344,7 +344,7 @@ button {
 
 .top-nav:hover .nav-label,
 .top-nav:focus-within .nav-label {
-  max-width: 240px;
+  max-width: 220px;
   opacity: 1;
   transform: translateX(0);
 }
@@ -4969,4 +4969,25 @@ tbody tr:last-child td {
 
 .top-nav .brand-name {
   font-size: 1.06rem;
+}
+
+/* Drifting particles behind each page's title banner, as in the navigation panel. */
+.hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.hero > .hero-network {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.6;
+  pointer-events: none;
 }
