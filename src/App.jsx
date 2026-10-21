@@ -4563,7 +4563,7 @@ export default function App({ user = null, onSignOut = null }) {
         {activeView === 'ai-tools' && <AiToolsView />}
 
         {activeView === 'ai-assistant' && (
-          <ChatAssistant backendBaseUrl={BACKEND_BASE_URL} clientId={portalClientId} />
+          <ChatAssistant backendBaseUrl={BACKEND_BASE_URL} clientId={portalClientId} userEmail={user?.email || ''} />
         )}
 
         {activeView === 'unified-dashboard' && (

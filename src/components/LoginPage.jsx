@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import allionLogo from '../assets/allion-logo.png';
+import AllionMark from './AllionMark';
 import NetworkCanvas from './NetworkCanvas';
 import './LoginPage.css';
 
@@ -66,24 +67,6 @@ function FieldIcon({ type }) {
   return (
     <svg aria-hidden="true" className={`login-field-icon login-field-icon-${type}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       {paths[type]}
-    </svg>
-  );
-}
-
-// The Allion mark in its brand colours (blue bar, orange bar, cyan dot), with
-// the blue lifted so it reads on the dark hero.
-function AllionMark() {
-  return (
-    <svg aria-hidden="true" className="login-brand-mark" viewBox="0 0 60 54">
-      <defs>
-        <linearGradient id="allion-mark-blue" x1="0" y1="1" x2="0.6" y2="0">
-          <stop offset="0" stopColor="#1b63b0" />
-          <stop offset="1" stopColor="#3d8bfd" />
-        </linearGradient>
-      </defs>
-      <path d="M9 46 30 8" stroke="url(#allion-mark-blue)" strokeWidth="12" strokeLinecap="round" />
-      <path d="M29 46 39 28" stroke="#f8a627" strokeWidth="12" strokeLinecap="round" />
-      <circle cx="51" cy="45" r="6.5" fill="#1fb0ea" />
     </svg>
   );
 }
@@ -179,7 +162,7 @@ export default function LoginPage({ session, onSignedIn }) {
       <main className="login-layout">
         <section className="login-hero" aria-labelledby="login-headline">
           <div className="login-brand">
-            <AllionMark />
+            <AllionMark className="login-brand-mark" />
             <span className="login-brand-divider" aria-hidden="true" />
             <span className="login-brand-name">Allion<span>One</span></span>
           </div>

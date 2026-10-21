@@ -1,40 +1,83 @@
 import { useEffect, useRef, useState } from 'react';
+import AllionMark from './components/AllionMark';
 
-const SUGGESTED_QUESTIONS = [
-  'Is there any license available for Postman?',
-  'Which licenses can be reclaimed now?',
-  'What are the largest monthly savings opportunities?',
-  'Summarize the latest license decisions.',
-  'I need access to Postman.',
-];
-
-const WELCOME_MESSAGE = {
-  role: 'assistant',
-  content:
-    'Hello! I can analyze license inventory, completed evaluation decisions, and recent usage metrics. What would you like to know?',
-};
 const REQUESTER_PROFILE_STORAGE_KEY = 'app-usage-monitoring-requester-profile';
+// Recent chats are kept in this browser only (per signed-in user).
+const HISTORY_STORAGE_PREFIX = 'allionone-chat-history';
+const HISTORY_LIMIT = 30;
+const TITLE_LENGTH = 60;
 
-function getRequesterProfile() {
+function readStorage(key, fallback) {
   try {
-    return JSON.parse(window.localStorage.getItem(REQUESTER_PROFILE_STORAGE_KEY)) || { name: '', email: '' };
+    return JSON.parse(window.localStorage.getItem(key)) || fallback;
   } catch {
-    return { name: '', email: '' };
+    return fallback;
   }
 }
 
-export default function ChatAssistant({ backendBaseUrl, clientId }) {
-  const [messages, setMessages] = useState([WELCOME_MESSAGE]);
+function writeStorage(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be full or blocked; the chat keeps working for this visit.
+  }
+}
+
+// The conversation topic is the first question, trimmed to one line.
+function conversationTitle(text) {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH - 1).trimEnd()}…` : line;
+}
+
+function relativeTime(timestamp) {
+  const minutes = Math.round((Date.now() - timestamp) / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'Yesterday' : `${days} days ago`;
+}
+
+function SendIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
+    </svg>
+  );
+}
+
+export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = '' }) {
+  const historyKey = `${HISTORY_STORAGE_PREFIX}:${userEmail || 'local'}`;
+  const [conversations, setConversations] = useState(() => readStorage(historyKey, []));
+  const [activeId, setActiveId] = useState(null);
   const [draft, setDraft] = useState('');
-  const [isSending, setIsSending] = useState(false);
+  const [sendingId, setSendingId] = useState(null);
   const [error, setError] = useState('');
   const [requests, setRequests] = useState([]);
-  const [requester, setRequester] = useState(getRequesterProfile);
+  const [requester, setRequester] = useState(() => readStorage(REQUESTER_PROFILE_STORAGE_KEY, { name: '', email: '' }));
   const messageEndRef = useRef(null);
+  const composerRef = useRef(null);
+
+  const active = conversations.find((conversation) => conversation.id === activeId) || null;
+  const isSending = sendingId !== null;
 
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [messages, isSending]);
+  }, [active?.messages.length, sendingId]);
+
+  useEffect(() => {
+    writeStorage(historyKey, conversations.slice(0, HISTORY_LIMIT));
+  }, [conversations, historyKey]);
+
+  useEffect(() => {
+    writeStorage(REQUESTER_PROFILE_STORAGE_KEY, requester);
+  }, [requester]);
+
+  useEffect(() => {
+    composerRef.current?.focus();
+  }, [activeId]);
 
   const loadRequests = async () => {
     try {
@@ -53,20 +96,38 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
     loadRequests();
   }, [backendBaseUrl, clientId]);
 
-  useEffect(() => {
-    window.localStorage.setItem(REQUESTER_PROFILE_STORAGE_KEY, JSON.stringify(requester));
-  }, [requester]);
+  const updateConversation = (id, change) => {
+    setConversations((current) => {
+      const target = current.find((conversation) => conversation.id === id);
+      if (!target) return current;
+      const updated = { ...change(target), updatedAt: Date.now() };
+      // Most recently used first.
+      return [updated, ...current.filter((conversation) => conversation.id !== id)];
+    });
+  };
 
   const sendMessage = async (messageText) => {
     const content = messageText.trim();
     if (!content || isSending) return;
 
     const userMessage = { role: 'user', content };
-    const conversation = [...messages, userMessage];
-    setMessages(conversation);
+    let id = activeId;
+    let history = active?.messages || [];
+    if (!active) {
+      id = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      history = [];
+      setConversations((current) => [
+        { id, title: conversationTitle(content), messages: [userMessage], createdAt: Date.now(), updatedAt: Date.now() },
+        ...current,
+      ].slice(0, HISTORY_LIMIT));
+      setActiveId(id);
+    } else {
+      updateConversation(id, (conversation) => ({ ...conversation, messages: [...conversation.messages, userMessage] }));
+    }
+    const conversation = [...history, userMessage];
     setDraft('');
     setError('');
-    setIsSending(true);
+    setSendingId(id);
 
     try {
       const response = await fetch(`${backendBaseUrl}/api/assistant/chat`, {
@@ -87,22 +148,36 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
       if (!response.ok) {
         throw new Error(payload.error || `Assistant request failed with status ${response.status}`);
       }
-      setMessages((current) => [
+      updateConversation(id, (current) => ({
         ...current,
-        {
-          role: 'assistant',
-          content: payload.answer,
-          source: payload.source,
-          recordsReviewed: payload.recordsReviewed,
-          workflow: payload.workflow,
-        },
-      ]);
+        messages: [
+          ...current.messages,
+          {
+            role: 'assistant',
+            content: payload.answer,
+            source: payload.source,
+            recordsReviewed: payload.recordsReviewed,
+            workflow: payload.workflow,
+          },
+        ],
+      }));
       if (payload.workflow) loadRequests();
     } catch (requestError) {
       setError(requestError.message || 'The assistant is temporarily unavailable.');
     } finally {
-      setIsSending(false);
+      setSendingId(null);
     }
+  };
+
+  const openConversation = (id) => {
+    setActiveId(id);
+    setError('');
+    setDraft('');
+  };
+
+  const deleteConversation = (id) => {
+    setConversations((current) => current.filter((conversation) => conversation.id !== id));
+    if (id === activeId) setActiveId(null);
   };
 
   const handleSubmit = (event) => {
@@ -110,21 +185,44 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
     sendMessage(draft);
   };
 
+  const composerKeys = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage(draft);
+    }
+  };
+
   return (
     <section className="assistant-workspace" aria-label="AI license assistant">
       <aside className="assistant-sidebar">
-        <div className="assistant-suggestions">
-          <span>Try asking</span>
-          {SUGGESTED_QUESTIONS.map((question) => (
-            <button
-              disabled={isSending}
-              key={question}
-              type="button"
-              onClick={() => sendMessage(question)}
-            >
-              {question}
-            </button>
-          ))}
+        <button className="assistant-new-chat" type="button" onClick={() => openConversation(null)} disabled={!active}>
+          <span aria-hidden="true">+</span> New chat
+        </button>
+        <div className="assistant-history">
+          <span>Recent chats</span>
+          {conversations.length ? (
+            <ul>
+              {conversations.map((conversation) => (
+                <li key={conversation.id} className={conversation.id === activeId ? 'active' : ''}>
+                  <button type="button" className="assistant-history-open" onClick={() => openConversation(conversation.id)}>
+                    <strong>{conversation.title}</strong>
+                    <small>{relativeTime(conversation.updatedAt)}</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="assistant-history-delete"
+                    aria-label={`Delete chat: ${conversation.title}`}
+                    title="Delete chat"
+                    onClick={() => deleteConversation(conversation.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No chats yet. Ask a question to start one.</p>
+          )}
         </div>
         <div className="assistant-scope-note">
           <strong>Request workflow</strong>
@@ -163,89 +261,111 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
         </div>
       </aside>
 
-      <div className="assistant-chat-panel">
-        <div className="assistant-chat-header">
-          <div className="assistant-avatar" aria-hidden="true">AI</div>
-          <div>
-            <h2>License Intelligence Assistant</h2>
-            <p>Ask in plain language about availability, utilization, and savings.</p>
+      {!active ? (
+        <div className="assistant-landing">
+          <div className="assistant-landing-brand">
+            <AllionMark className="assistant-landing-mark" tone="light" />
+            <h2>
+              <span className="assistant-landing-allion">Allion</span>
+              <span className="assistant-landing-one">One</span> AI Assistant
+            </h2>
           </div>
-          <button
-            className="assistant-clear-button"
-            type="button"
-            onClick={() => {
-              setMessages([WELCOME_MESSAGE]);
-              setError('');
-            }}
-          >
-            New chat
-          </button>
+          <form className="assistant-launch" onSubmit={handleSubmit}>
+            <textarea
+              ref={composerRef}
+              aria-label="Ask AllionOne AI to start a new chat"
+              maxLength={2000}
+              placeholder="Ask about license availability, reclaimable licenses, or savings…"
+              rows="1"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={composerKeys}
+            />
+            <button aria-label="Start chat" disabled={!draft.trim() || isSending} type="submit">
+              <SendIcon />
+            </button>
+          </form>
         </div>
+      ) : (
+        <div className="assistant-chat-panel" key={active.id}>
+          <div className="assistant-chat-header">
+            <div className="assistant-avatar" aria-hidden="true">AI</div>
+            <div>
+              <h2 title={active.title}>{active.title}</h2>
+              <p>
+                Started {relativeTime(active.createdAt).toLowerCase()} · {active.messages.length} message{active.messages.length === 1 ? '' : 's'}
+              </p>
+            </div>
+            <div className="assistant-header-brand" aria-label="AllionOne AI Assistant">
+              <AllionMark className="assistant-header-mark" />
+              <span>
+                <span className="assistant-header-allion">Allion</span>
+                <span className="assistant-header-one">One</span> AI Assistant
+              </span>
+            </div>
+          </div>
 
-        <div className="assistant-messages" aria-live="polite">
-          {messages.map((message, index) => (
-            <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}>
-              <div className="assistant-message-label">
-                {message.role === 'assistant' ? 'AllionOne AI' : 'You'}
+          <div className="assistant-messages" aria-live="polite">
+            {active.messages.map((message, index) => (
+              <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}>
+                <div className="assistant-message-label">
+                  {message.role === 'assistant' ? 'AllionOne AI' : 'You'}
+                </div>
+                <div className="assistant-message-bubble">
+                  {message.content.split('\n').map((line, lineIndex) => (
+                    <span key={`${line}-${lineIndex}`}>{line || ' '}</span>
+                  ))}
+                </div>
+                {message.source && (
+                  <small className="assistant-message-source">
+                    {message.source === 'openai-mcp'
+                      ? 'AI Agent answer'
+                      : message.source === 'workflow'
+                        ? `Workflow request ${message.workflow?.status?.replace('_', ' ') || 'submitted'}`
+                      : message.source === 'monitoring-agent-fallback'
+                        ? 'Monitoring-agent fallback from live database context'
+                        : 'Database summary'}
+                    {Number.isFinite(message.recordsReviewed)
+                      ? ` · ${message.recordsReviewed} records reviewed`
+                      : ''}
+                  </small>
+                )}
               </div>
-              <div className="assistant-message-bubble">
-                {message.content.split('\n').map((line, lineIndex) => (
-                  <span key={`${line}-${lineIndex}`}>{line || '\u00a0'}</span>
-                ))}
+            ))}
+            {sendingId === active.id && (
+              <div className="assistant-message assistant">
+                <div className="assistant-message-label">AllionOne AI</div>
+                <div className="assistant-typing" aria-label="Assistant is analyzing">
+                  <i /><i /><i />
+                </div>
               </div>
-              {message.source && (
-                <small className="assistant-message-source">
-                  {message.source === 'openai-mcp'
-                    ? 'AI Agent answer'
-                    : message.source === 'workflow'
-                      ? `Workflow request ${message.workflow?.status?.replace('_', ' ') || 'submitted'}`
-                    : message.source === 'monitoring-agent-fallback'
-                      ? 'Monitoring-agent fallback from live database context'
-                      : 'Database summary'}
-                  {Number.isFinite(message.recordsReviewed)
-                    ? ` · ${message.recordsReviewed} records reviewed`
-                    : ''}
-                </small>
-              )}
-            </div>
-          ))}
-          {isSending && (
-            <div className="assistant-message assistant">
-              <div className="assistant-message-label">AllionOne AI</div>
-              <div className="assistant-typing" aria-label="Assistant is analyzing">
-                <i /><i /><i />
-              </div>
-            </div>
-          )}
-          <div ref={messageEndRef} />
+            )}
+            <div ref={messageEndRef} />
+          </div>
+
+          {error && <div className="assistant-error">{error}</div>}
+
+          <form className="assistant-composer" onSubmit={handleSubmit}>
+            <textarea
+              ref={composerRef}
+              aria-label="Ask the license assistant"
+              disabled={isSending}
+              maxLength={2000}
+              placeholder="Ask a follow-up…"
+              rows="2"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={composerKeys}
+            />
+            <button disabled={isSending || !draft.trim()} type="submit">
+              {isSending ? 'Analyzing…' : 'Send'}
+            </button>
+          </form>
+          <small className="assistant-disclaimer">
+            Responses may require verification before procurement or reclamation decisions.
+          </small>
         </div>
-
-        {error && <div className="assistant-error">{error}</div>}
-
-        <form className="assistant-composer" onSubmit={handleSubmit}>
-          <textarea
-            aria-label="Ask the license assistant"
-            disabled={isSending}
-            maxLength={2000}
-            placeholder="Ask about license availability, reclaimable licenses, or savings…"
-            rows="2"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage(draft);
-              }
-            }}
-          />
-          <button disabled={isSending || !draft.trim()} type="submit">
-            {isSending ? 'Analyzing…' : 'Send'}
-          </button>
-        </form>
-        <small className="assistant-disclaimer">
-          Responses may require verification before procurement or reclamation decisions.
-        </small>
-      </div>
+      )}
     </section>
   );
 }
