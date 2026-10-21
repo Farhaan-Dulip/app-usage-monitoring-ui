@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import allionLogo from '../assets/allion-logo.png';
 import NetworkCanvas from './NetworkCanvas';
 
@@ -24,9 +25,33 @@ function NavIcon({ type }) {
   );
 }
 
+// Remembered per browser: the panel kept open, or hover-to-open (default).
+const PIN_STORAGE_KEY = 'allionone-nav-pinned';
+
+function readPinned() {
+  try {
+    return window.localStorage.getItem(PIN_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+// Drawer icon: the panel outline with an arrow out (keep open) or in (collapse).
+function DrawerIcon({ open }) {
+  return (
+    <svg aria-hidden="true" className="nav-icon" fill="none" focusable="false" viewBox="0 0 16 16">
+      <g stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.4">
+        <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="2" />
+        <path d="M6 2.75v10.5" />
+        {open ? <path d="m10.75 6.25-1.75 1.75 1.75 1.75" /> : <path d="m9 6.25 1.75 1.75L9 9.75" />}
+      </g>
+    </svg>
+  );
+}
+
 const navigationItems = [
   ['unified-dashboard', 'dashboard', 'Dashboard'],
-  ['dashboard', 'software', 'Software License Management'],
+  ['dashboard', 'software', 'License Utilizations'],
   ['agent-management', 'tracker', 'Tracker Management'],
   ['apps-inventory', 'inventory', 'Enterprise Apps Inventory'],
   ['reporting-insights', 'reports', 'Reporting & Insights'],
@@ -44,16 +69,51 @@ export default function AppNavigation({
   user,
   onSignOut,
 }) {
+  const [pinned, setPinned] = useState(readPinned);
+  // After "collapse in", stay collapsed until the pointer leaves, like after a menu click.
+  const [collapsedByToggle, setCollapsedByToggle] = useState(false);
+
+  const togglePinned = (event) => {
+    const next = !pinned;
+    setPinned(next);
+    setCollapsedByToggle(!next);
+    try {
+      window.localStorage.setItem(PIN_STORAGE_KEY, String(next));
+    } catch {
+      // Not remembered across visits when storage is blocked.
+    }
+    if (!next) event.currentTarget.blur();
+  };
+
+  const className = pinned
+    ? 'top-nav nav-pinned'
+    : collapsed || collapsedByToggle
+      ? 'top-nav nav-collapsed-after-select'
+      : 'top-nav';
+
   return (
     <nav
-      className={collapsed ? 'top-nav nav-collapsed-after-select' : 'top-nav'}
+      className={className}
       aria-label="Primary navigation"
-      onMouseLeave={onResetCollapse}
+      onMouseLeave={() => {
+        setCollapsedByToggle(false);
+        onResetCollapse();
+      }}
     >
       <NetworkCanvas className="nav-network" area={5000} maxNodes={40} reach={90} />
       <div className="brand-mark">
         <span className="brand-icon"><img src={allionLogo} alt="" width="34" height="34" /></span>
         <span className="brand-name">Allion<strong>One</strong></span>
+        <button
+          className="nav-pin"
+          type="button"
+          aria-pressed={pinned}
+          aria-label={pinned ? 'Collapse navigation' : 'Keep navigation open'}
+          title={pinned ? 'Collapse navigation' : 'Keep navigation open'}
+          onClick={togglePinned}
+        >
+          <DrawerIcon open={pinned} />
+        </button>
       </div>
       <div className="nav-actions">
         {navigationItems.map(([view, icon, label]) => (

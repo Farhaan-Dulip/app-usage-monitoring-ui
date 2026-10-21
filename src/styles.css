@@ -21,10 +21,18 @@ button {
 
 .app-shell {
   display: block;
-  width: calc(100% - 208px);
-  margin: 0 72px 0 136px;
+  width: calc(100% - 136px);
+  margin: 0 32px 0 104px;
   padding: 20px 0 48px;
   transition: margin-left 0.24s ease, width 0.24s ease;
+}
+
+/* The page narrows as the navigation panel expands (72px -> 270px), keeping
+   the same 32px gap, and widens again when it collapses. */
+.app-shell:has(.top-nav:hover:not(.nav-collapsed-after-select)),
+.app-shell:has(.top-nav:focus-within:not(.nav-collapsed-after-select)) {
+  width: calc(100% - 334px);
+  margin-left: 302px;
 }
 
 .main-content {
@@ -56,7 +64,7 @@ button {
 
 .top-nav:hover,
 .top-nav:focus-within {
-  width: 300px;
+  width: 270px;
   background: rgba(255, 255, 255, 0.74);
   box-shadow: 0 18px 48px rgba(20, 33, 61, 0.16);
 }
@@ -344,7 +352,7 @@ button {
 
 .top-nav:hover .nav-label,
 .top-nav:focus-within .nav-label {
-  max-width: 220px;
+  max-width: 200px;
   opacity: 1;
   transform: translateX(0);
 }
@@ -4943,12 +4951,14 @@ tbody tr:last-child td {
   }
 }
 
-/* Logo and AllionOne centred in the panel header, collapsed or expanded. */
+/* Logo left-aligned over the icon column (its centre matches the menu icons'),
+   so it stays put while the panel expands and the name appears beside it. */
 .top-nav .brand-mark,
 .top-nav:hover .brand-mark,
 .top-nav:focus-within .brand-mark,
 .top-nav.nav-collapsed-after-select .brand-mark {
-  justify-content: center;
+  justify-content: flex-start;
+  padding-left: 10px;
 }
 
 /* Drifting particles behind the navigation panel (under the grid and items). */
@@ -4990,4 +5000,74 @@ tbody tr:last-child td {
   height: 100%;
   opacity: 0.6;
   pointer-events: none;
+}
+
+/* Keep-open toggle on the right of the panel header. Hidden while the panel is
+   collapsed; "nav-pinned" holds the expanded layout without hover. */
+.nav-pin {
+  display: none;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  place-items: center;
+  border: 1px solid rgba(234, 241, 251, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #9db0c8;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.nav-pin:hover,
+.nav-pin:focus-visible {
+  border-color: rgba(22, 172, 216, 0.5);
+  background: rgba(22, 172, 216, 0.12);
+  color: #ffffff;
+  outline: none;
+}
+
+.top-nav:hover:not(.nav-collapsed-after-select) .nav-pin,
+.top-nav:focus-within:not(.nav-collapsed-after-select) .nav-pin,
+.top-nav.nav-pinned .nav-pin {
+  display: inline-grid;
+}
+
+.top-nav .brand-mark {
+  padding-right: 4px;
+}
+
+.top-nav.nav-pinned {
+  width: 270px;
+}
+
+.top-nav.nav-pinned .brand-mark {
+  gap: 10px;
+}
+
+.top-nav.nav-pinned .brand-mark > span:not(.brand-icon),
+.top-nav.nav-pinned .nav-label {
+  max-width: 200px;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.app-shell:has(.top-nav.nav-pinned) {
+  width: calc(100% - 334px);
+  margin-left: 302px;
+}
+
+@media (max-width: 820px) {
+  .top-nav .nav-pin {
+    display: none;
+  }
+
+  .top-nav.nav-pinned {
+    width: 100%;
+  }
+
+  .app-shell:has(.top-nav.nav-pinned) {
+    width: min(100% - 20px, 1180px);
+    margin: 0 auto;
+  }
 }

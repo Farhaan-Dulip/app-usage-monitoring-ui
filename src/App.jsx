@@ -1223,7 +1223,7 @@ function escapeEmailHtml(value) {
 }
 
 function createEmailSummarySubject(windowEndsAt) {
-  return `Software License Management summary - ${formatDateTime(windowEndsAt)}`;
+  return `License Utilizations summary - ${formatDateTime(windowEndsAt)}`;
 }
 
 function createEmailSummaryHtml({
@@ -1286,7 +1286,7 @@ function createEmailSummaryHtml({
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Software License Management Summary</title>
+  <title>License Utilizations Summary</title>
 </head>
 <body style="margin:0;padding:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:#f3f7fb;color:#0f172a;">
   <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
@@ -1297,7 +1297,7 @@ function createEmailSummaryHtml({
             <td style="padding:34px 34px 30px;background:#101828;color:#ffffff;">
               <p style="margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:0.14em;color:#8fd3ff;">License intelligence</p>
               <h1 style="margin:0;font-size:28px;line-height:1.25;letter-spacing:0;">Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} to ${formatDateTime(evaluationWindow.endsAt)}</h1>
-              <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:#d7e3f0;">Software License Management - live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.</p>
+              <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:#d7e3f0;">License Utilizations - live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.</p>
             </td>
           </tr>
           <tr>
@@ -1491,7 +1491,7 @@ function createEmailSummaryBody({
   const baseLines = [
     'License intelligence',
     '',
-    'Software License Management',
+    'License Utilizations',
     'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
     '',
     `Total Monthly Software Spend: ${formatCurrency(aggregates.totalMonthlySoftwareSpend)}`,
@@ -2332,7 +2332,7 @@ export default function App({ user = null, onSignOut = null }) {
     },
     dashboard: {
       eyebrow: 'License intelligence',
-      title: 'Software License Management',
+      title: 'License Utilizations',
       description:
         'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
     },
@@ -3711,7 +3711,7 @@ export default function App({ user = null, onSignOut = null }) {
     }
 
     if (!isEmailSummaryReady) {
-      throw new Error('Software License Management data is still loading.');
+      throw new Error('License Utilizations data is still loading.');
     }
 
     const windowKey = `${evaluationWindow.startsAt}-${evaluationWindow.endsAt}`;
