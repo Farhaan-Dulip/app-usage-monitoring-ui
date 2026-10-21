@@ -14,6 +14,7 @@ import { CREDENTIAL_CHECKS } from './credentialChecks.js';
 import {
   CredentialError,
   DATA_CONNECTORS,
+  LICENSE_DATA_CONNECTORS,
   VENDOR_FIELDS,
   cleanValues,
   credentialEnv,
@@ -57,6 +58,13 @@ export async function testCredentials(vendor, values, { fetch: fetchImpl = fetch
   return CREDENTIAL_CHECKS[vendor](values, fetchImpl);
 }
 
+// Where a vendor's live data shows once connected (null: stored only).
+function dataPage(vendor) {
+  if (DATA_CONNECTORS.has(vendor)) return 'AI Tools';
+  if (LICENSE_DATA_CONNECTORS.has(vendor)) return 'Reports & Insights > Enterprise App Licenses';
+  return null;
+}
+
 export function createIntegrationsRouter({ express, collection, env = process.env, fetch: fetchImpl = fetch, onChange = () => {} }) {
   const router = express.Router();
   const secret = () => env.CREDENTIALS_KEY;
@@ -91,7 +99,7 @@ export function createIntegrationsRouter({ express, collection, env = process.en
           updatedAt: sources[`${vendor}UpdatedAt`] || null,
           problem: problems[vendor] || null,
           oauth: vendor === 'copilot' && oauthConfigured(),
-          dataConnector: DATA_CONNECTORS.has(vendor),
+          dataConnector: dataPage(vendor),
         })),
       });
     } catch (error) {
@@ -111,7 +119,7 @@ export function createIntegrationsRouter({ express, collection, env = process.en
       }
       await saveCredentials(collection, secret(), vendor, values);
       onChange();
-      return res.json({ connected: true, checked: check.checked, note: check.reason || null, dataConnector: DATA_CONNECTORS.has(vendor) });
+      return res.json({ connected: true, checked: check.checked, note: check.reason || null, dataConnector: dataPage(vendor) });
     } catch (error) {
       return fail(res, error);
     }

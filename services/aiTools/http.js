@@ -22,7 +22,7 @@ export async function getJson(fetchImpl, vendor, url, headers = {}, timeoutMs = 
     body = null;
   }
   if (!response.ok) {
-    const detail = body?.error?.message || body?.message || text.slice(0, 200) || response.statusText;
+    const detail = body?.error?.message || body?.message || body?.detail || (typeof body?.error === 'string' ? body.error : '') || text.slice(0, 200) || response.statusText;
     throw new VendorApiError(vendor, `HTTP ${response.status} from ${new URL(url).pathname}: ${detail}`, response.status);
   }
   return body ?? text;

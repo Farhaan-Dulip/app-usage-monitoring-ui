@@ -32,6 +32,7 @@ import { aiToolsForUser, clearAiToolsCache, getAiToolsOverview } from './service
 import { credentialEnv } from './services/aiTools/credentials.js';
 import { createIntegrationsRouter } from './services/aiTools/integrations.js';
 import { buildDashboard, licenseAppList } from './services/reports/dashboards.js';
+import { clearLicenseCache } from './services/reports/licenseConnectors.js';
 import { buildTrackerReport } from './services/reports/trackerReport.js';
 import { authConfig, createAuthRouter, requireSession } from './services/portalAuth.js';
 import {
@@ -833,7 +834,14 @@ async function aiToolsEnv() {
   return (await credentialEnv(integrationCredentials, process.env.CREDENTIALS_KEY, process.env)).env;
 }
 
-app.use('/api/integrations', createIntegrationsRouter({ express, collection: integrationCredentials, onChange: clearAiToolsCache }));
+app.use('/api/integrations', createIntegrationsRouter({
+  express,
+  collection: integrationCredentials,
+  onChange: () => {
+    clearAiToolsCache();
+    clearLicenseCache();
+  },
+}));
 
 // Sample data also covers the real device owners, so tracker pages show how
 // each person's data will look before live credentials are connected.
@@ -920,7 +928,7 @@ async function recentTelemetry() {
 app.get('/api/reports/apps', async (_req, res) => {
   try {
     const overview = await getAiToolsOverview({ env: await aiToolsEnv(), sampleIdentities: await deviceOwnerIdentities() });
-    return res.json({ apps: licenseAppList(overview) });
+    return res.json({ apps: licenseAppList(overview, await aiToolsEnv()) });
   } catch (error) {
     console.error('Report app list failed:', error.message);
     return res.status(500).json({ error: 'Unable to load apps' });
@@ -930,11 +938,12 @@ app.get('/api/reports/apps', async (_req, res) => {
 app.get('/api/reports/apps/:appId', async (req, res) => {
   try {
     const identities = await deviceOwnerIdentities();
+    const env = await aiToolsEnv();
     const [overview, events] = await Promise.all([
-      getAiToolsOverview({ env: await aiToolsEnv(), sampleIdentities: identities }),
+      getAiToolsOverview({ env, sampleIdentities: identities }),
       recentTelemetry(),
     ]);
-    const dashboard = buildDashboard(req.params.appId, { overview, events, identities });
+    const dashboard = await buildDashboard(req.params.appId, { overview, events, identities, env, refresh: req.query.refresh === '1' });
     if (!dashboard) return res.status(404).json({ error: 'Unknown app' });
     return res.json(dashboard);
   } catch (error) {

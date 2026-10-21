@@ -19,7 +19,7 @@ export const VENDOR_FIELDS = {
     githubOrg: { env: 'GITHUB_ORG', required: true },
     githubLoginEmails: { env: 'GITHUB_LOGIN_EMAILS' },
   },
-  // Connected and checked from the portal; their data is not pulled in yet.
+  // Enterprise App Licenses dashboards (services/reports/licenseConnectors.js).
   slack: {
     slackToken: { env: 'SLACK_ADMIN_TOKEN', secret: true, required: true },
   },
@@ -41,6 +41,9 @@ export const VENDOR_FIELDS = {
   },
   figma: {
     figmaToken: { env: 'FIGMA_TOKEN', secret: true, required: true },
+    // Optional: seat types (Full, Dev, Collab, View) come from SCIM.
+    figmaScimTenantId: { env: 'FIGMA_SCIM_TENANT_ID' },
+    figmaScimToken: { env: 'FIGMA_SCIM_TOKEN', secret: true },
   },
   postman: {
     postmanApiKey: { env: 'POSTMAN_API_KEY', secret: true, required: true },
@@ -52,9 +55,11 @@ export const VENDOR_FIELDS = {
   },
 };
 
-// Vendors whose data the AI Tools page already pulls (the others are stored and
-// checked, ready for their connectors).
+// Vendors whose data the AI Tools page pulls (tested with that connector).
 export const DATA_CONNECTORS = new Set(['claude', 'codex', 'copilot']);
+// Vendors whose data the Enterprise App Licenses dashboards pull (tested with a
+// lightweight credential check). Cursor and ChatGPT are stored only.
+export const LICENSE_DATA_CONNECTORS = new Set(['slack', 'zoom', 'figma', 'postman', 'docker', 'jetbrains']);
 
 export class CredentialError extends Error {
   constructor(message, statusCode) {

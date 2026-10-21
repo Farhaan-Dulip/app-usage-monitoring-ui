@@ -1,13 +1,15 @@
 // Reports & Insights > Enterprise App Licenses: one dashboard per app.
 //
 // Each dashboard = { app, mode, api, kpis, charts, table, tracker, notes }:
-//   mode 'live'    vendor admin API data (Claude, Codex, Copilot when connected)
-//        'sample'  sample data in the vendor API's response format
+//   mode 'live'    vendor admin API data (licenseConnectors.js), when connected
+//        'sample'  sample data in the same response format, when not
+//        'error'   connected, but the vendor call failed (never sample data)
 //        'tracker' no admin API; the Tracker's measurements are the data
 // `tracker` is always real: active time measured on PCs (telemetry) for the
 // app's processes. `api.endpoints[].verified` says how sure the field names are.
 import { daysSince, isoDay, lastDays } from '../aiTools/http.js';
 import { sampleChatGpt, sampleCursor, sampleDocker, sampleFigma, sampleJetBrains, samplePostman, sampleSlack, sampleZoom } from './vendorSamples.js';
+import { LICENSE_CONNECTORS, loadLicenseData } from './licenseConnectors.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -244,7 +246,7 @@ const BUILDERS = {
   },
 
   figma(raw, now) {
-    const logs = raw.activityLogs.meta.activity_logs;
+    const logs = raw.activityLogs.meta.activity_logs.filter((log) => log.actor?.email);
     const lastActive = {};
     const events = {};
     for (const log of logs) {
@@ -280,18 +282,18 @@ const BUILDERS = {
         ],
         rows: raw.seats.map((seat) => ({ id: seat.id, name: seat.name, email: seat.email, status: statusOf(lastActive[seat.email], now), lastActiveAt: lastActive[seat.email] || null, seat: seat.seat_type, events: events[seat.email] || 0 })),
       },
-      notes: [],
+      notes: seatTypes.Unknown ? ['Seat types need Figma SCIM (tenant ID and SCIM token in the Connect dialog); without it, seats are the people seen in the activity log.'] : [],
     };
   },
 
   postman(raw, now) {
-    const trails = raw.auditLogs.trails;
+    const trails = raw.auditLogs.trails.filter((trail) => trail.actor?.email);
     const lastActive = {};
     for (const trail of trails) if (!lastActive[trail.actor.email] || trail.timestamp > lastActive[trail.actor.email]) lastActive[trail.actor.email] = trail.timestamp;
     const actions = {};
     for (const trail of trails) actions[trail.action] = (actions[trail.action] || 0) + 1;
     const daily = Object.entries(byDay(now, trails, (trail) => isoDay(trail.timestamp), () => 1)).map(([date, value]) => ({ date, events: value }));
-    const users = raw.users.data;
+    const users = raw.users.data.map((user) => ({ ...user, roles: user.roles || [] }));
     return {
       kpis: [
         { label: 'Team members', value: users.length, format: 'number' },
@@ -323,19 +325,20 @@ const BUILDERS = {
     const members = raw.members.results;
     const versions = {};
     for (const member of members) versions[member.last_desktop_version] = (versions[member.last_desktop_version] || 0) + 1;
-    const latest = Object.keys(versions).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0];
+    const latest = Object.keys(versions).filter((version) => /^\d/.test(version)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0];
+    const roleOf = (member) => String(member.role || '').toLowerCase();
     const stale = members.filter((member) => daysSince(member.last_seen_at, now) > 30);
     return {
       kpis: [
         { label: 'Members (seats)', value: raw.members.count, format: 'number' },
         { label: 'Seen in 30 days', value: members.length - stale.length, format: 'number' },
         { label: 'Not seen in 30 days', value: stale.length, format: 'number' },
-        { label: `On latest Desktop (${latest})`, value: versions[latest] || 0, format: 'number' },
-        { label: 'Owners', value: members.filter((member) => member.role === 'Owner').length, format: 'number' },
+        ...(latest ? [{ label: `On latest Desktop (${latest})`, value: versions[latest] || 0, format: 'number' }] : []),
+        { label: 'Owners', value: members.filter((member) => roleOf(member) === 'owner').length, format: 'number' },
       ],
       charts: [
         { id: 'versions', title: 'Docker Desktop versions in use', type: 'bar', xKey: 'name', series: [{ key: 'value', label: 'Members' }], data: Object.entries(versions).map(([name, value]) => ({ name, value })).sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true })) },
-        { id: 'roles', title: 'Members by role', type: 'pie', data: ['Owner', 'Editor', 'Member'].map((role) => ({ name: role, value: members.filter((member) => member.role === role).length })) },
+        { id: 'roles', title: 'Members by role', type: 'pie', data: ['Owner', 'Editor', 'Member'].map((role) => ({ name: role, value: members.filter((member) => roleOf(member) === role.toLowerCase()).length })) },
       ],
       table: {
         title: 'Organization members',
@@ -430,26 +433,31 @@ export const API_INFO = {
   codex: { name: 'Codex Analytics API', endpoints: [['GET /v1/analytics/codex/workspaces/{id}/usage', 'integrator docs']] },
   copilot: { name: 'GitHub REST API (Copilot)', endpoints: [['GET /orgs/{org}/copilot/billing', 'docs'], ['GET /orgs/{org}/copilot/billing/seats', 'docs'], ['GET /orgs/{org}/copilot/metrics/reports/users-28-day/latest', 'docs']] },
   cursor: { name: 'Cursor Admin API', endpoints: [['GET /teams/members', 'docs'], ['POST /teams/daily-usage-data', 'docs'], ['POST /teams/spend', 'docs']] },
-  slack: { name: 'Slack Web API (admin)', endpoints: [['team.billableInfo', 'docs'], ['admin.analytics.getFile (member)', 'unverified fields']] },
-  zoom: { name: 'Zoom REST API v2', endpoints: [['GET /users', 'partly verified'], ['GET /report/daily', 'unverified fields']] },
-  figma: { name: 'Figma REST API', endpoints: [['GET /v1/activity_logs', 'partly verified'], ['SCIM users (seat type)', 'unverified fields']] },
-  postman: { name: 'Postman API', endpoints: [['GET /users', 'integrator docs'], ['GET /audit/logs', 'unverified fields']] },
-  docker: { name: 'Docker Hub API', endpoints: [['GET /v2/orgs/{org}/members', 'docs']] },
-  jetbrains: { name: 'JetBrains Account API', endpoints: [['Organization licences', 'unverified fields']] },
+  slack: { name: 'Slack Web API (admin)', endpoints: [['users.list', 'docs'], ['team.billableInfo', 'docs'], ['admin.analytics.getFile (type=member)', 'docs; fields unverified']] },
+  zoom: { name: 'Zoom REST API v2', endpoints: [['POST /oauth/token (account_credentials)', 'docs'], ['GET /users', 'docs'], ['GET /report/daily', 'docs; fields unverified']] },
+  figma: { name: 'Figma REST API', endpoints: [['GET /v1/activity_logs', 'docs; fields unverified'], ['SCIM GET /scim/v2/{tenant}/Users (seat type)', 'unverified fields']] },
+  postman: { name: 'Postman API', endpoints: [['GET /users', 'integrator docs'], ['GET /audit/logs', 'docs; fields unverified']] },
+  docker: { name: 'Docker Hub API', endpoints: [['POST /v2/auth/token', 'docs'], ['GET /v2/orgs/{org}/members', 'docs; activity fields unverified']] },
+  jetbrains: { name: 'JetBrains Account API', endpoints: [['GET /api/v1/customer/licenses', 'unverified route and fields']] },
   chatgpt: { name: 'ChatGPT Enterprise analytics API', endpoints: [['Daily usage analytics', 'unverified fields']] },
   vscode: { name: 'None (free)', endpoints: [] },
   'visual-studio': { name: 'None public (Visual Studio Subscriptions admin portal)', endpoints: [] },
 };
 
-export function licenseAppList(overview) {
+// env: credentials (environment overlaid with Connect dialog values).
+export function licenseAppList(overview, env = {}) {
   return LICENSE_APPS.map((app) => {
     const vendor = overview?.vendors.find((item) => item.id === app.id);
-    return { id: app.id, name: app.name, vendor: app.vendor, mode: app.source === 'ai-tools' ? vendor?.mode || 'sample' : app.source };
+    const mode = app.source === 'ai-tools'
+      ? vendor?.mode || 'sample'
+      : LICENSE_CONNECTORS[app.id]?.configured(env) ? 'live' : app.source;
+    return { id: app.id, name: app.name, vendor: app.vendor, mode };
   });
 }
 
-// overview: AI Tools overview (live or sample); events: recent telemetry.
-export function buildDashboard(appId, { overview, events = [], identities = [], now = new Date() }) {
+// overview: AI Tools overview (live or sample); events: recent telemetry;
+// env/fetch: for the live license connectors.
+export async function buildDashboard(appId, { overview, events = [], identities = [], now = new Date(), env = {}, fetch: fetchImpl = fetch, refresh = false }) {
   const app = LICENSE_APPS.find((item) => item.id === appId);
   if (!app) return null;
   const tracker = trackerUsage(events, app.processes, now);
@@ -474,8 +482,10 @@ export function buildDashboard(appId, { overview, events = [], identities = [], 
       notes: [`${app.name} has no admin API: these numbers are the Tracker's measurements on each PC.`],
     };
   }
-  const raw = SAMPLES[app.id](now, identities);
-  return { ...base, mode: 'sample', ...BUILDERS[app.id](raw, now), raw: undefined };
+  const data = await loadLicenseData(app.id, { env, fetch: fetchImpl, now, refresh });
+  if (data.mode === 'error') return { ...base, mode: 'error', error: data.error, kpis: [], charts: [], table: null, notes: [] };
+  const raw = data.mode === 'live' ? data.raw : SAMPLES[app.id](now, identities);
+  return { ...base, mode: data.mode, ...BUILDERS[app.id](raw, now) };
 }
 
 export { DAY };

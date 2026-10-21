@@ -72,7 +72,11 @@ const FORMS = {
   },
   figma: {
     intro: 'Paste a personal access token of a Figma organization admin (Settings > Security > Personal access tokens). Tokens expire after at most 90 days.',
-    fields: [{ name: 'figmaToken', label: 'Personal access token', placeholder: 'figd_…', secret: true }],
+    fields: [
+      { name: 'figmaToken', label: 'Personal access token', placeholder: 'figd_…', secret: true },
+      { name: 'figmaScimTenantId', label: 'SCIM tenant ID (optional, for seat types)', placeholder: 'Admin > Settings > SCIM' },
+      { name: 'figmaScimToken', label: 'SCIM API token (optional)', placeholder: '', secret: true },
+    ],
   },
   postman: {
     intro: 'Paste a Postman API key of a team admin (Postman > Settings > API keys).',
@@ -188,7 +192,7 @@ function ConnectForm({ vendor, status, canConnect, onClose, onChanged }) {
     const checked = result.checked ? 'checked and stored' : `stored without a check (${result.note || 'not checkable yet'})`;
     setMessage({
       text: result.dataConnector
-        ? `${name} connected (${checked}). Live data appears on the AI Tools page.`
+        ? `${name} connected (${checked}). Live data appears on ${result.dataConnector === true ? 'the AI Tools page' : `the ${result.dataConnector} page`}.`
         : `${name} credential ${checked}. Bringing ${name}'s seats and usage into the portal is the next step; it isn't built yet.`,
     });
     onChanged();
