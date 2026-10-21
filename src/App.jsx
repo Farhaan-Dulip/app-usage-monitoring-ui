@@ -1296,7 +1296,7 @@ function createEmailSummaryHtml({
             <td style="padding:34px 34px 30px;background:#101828;color:#ffffff;">
               <p style="margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:0.14em;color:#8fd3ff;">License intelligence</p>
               <h1 style="margin:0;font-size:28px;line-height:1.25;letter-spacing:0;">Evaluation window: ${formatDateTime(evaluationWindow.startsAt)} to ${formatDateTime(evaluationWindow.endsAt)}</h1>
-              <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:#d7e3f0;">Software Licsence Management - live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.</p>
+              <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:#d7e3f0;">Software License Management - live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.</p>
             </td>
           </tr>
           <tr>
@@ -1490,7 +1490,7 @@ function createEmailSummaryBody({
   const baseLines = [
     'License intelligence',
     '',
-    'Software Licsence Management',
+    'Software License Management',
     'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
     '',
     `Total Monthly Software Spend: ${formatCurrency(aggregates.totalMonthlySoftwareSpend)}`,
@@ -1558,7 +1558,7 @@ function createEmailSummaryBody({
     '',
     ...extensionLines,
     '',
-    'Delivered by AgentOps UI',
+    'Delivered by AllionOne',
   ].join('\n');
   const htmlBody = createEmailSummaryHtml({
     evaluationWindow,
@@ -2142,7 +2142,7 @@ function getModelLicenseBreakdown(extension) {
   );
 }
 
-export default function App() {
+export default function App({ user = null, onSignOut = null }) {
   const portalClientId = useMemo(getPortalClientId, []);
   const agentStartedAtRef = useRef(null);
   // received_at of the newest stored sample; polls request only newer ones.
@@ -2331,7 +2331,7 @@ export default function App() {
     },
     dashboard: {
       eyebrow: 'License intelligence',
-      title: 'Software Licsence Management',
+      title: 'Software License Management',
       description:
         'Live app usage telemetry translated into spend visibility, reclaimable seats, and savings opportunities.',
     },
@@ -4535,6 +4535,8 @@ export default function App() {
         onNavigate={handleNavSelection}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onResetCollapse={() => setIsNavCollapsedAfterSelect(false)}
+        user={user}
+        onSignOut={onSignOut}
       />
 
       <SettingsModal

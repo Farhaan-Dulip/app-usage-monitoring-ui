@@ -85,7 +85,6 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
                       <span className={`status-badge ${integrationBadge(vendorStatus(entry.connector), entry.connector).className}`}>
                         {integrationBadge(vendorStatus(entry.connector), entry.connector).label}
                       </span>
-                      {existing && <span className="status-badge status-active">In inventory</span>}
                       <button className="download-link-button" type="button" onClick={() => setConnecting(entry.connector)}>
                         Connect
                       </button>

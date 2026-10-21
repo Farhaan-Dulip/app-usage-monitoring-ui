@@ -32,6 +32,8 @@ const GRAPH_MAIL_SECRET = 'usage-poc/shared/graph-mail';
 // Optional admin credentials for the AI Tools page (Claude, Codex, Copilot),
 // created by scripts/setup-ai-tools.ps1; without them the page shows sample data.
 const AI_TOOLS_SECRET = 'usage-poc/shared/ai-tools';
+// Optional Microsoft Entra ID app for "Sign in with Microsoft" on the portal.
+const PORTAL_SSO_SECRET = 'usage-poc/shared/portal-sso';
 
 /**
  * Low-cost variant of the Docker deployment: the same four containers under
@@ -100,6 +102,8 @@ export class UsagePocEc2Stack extends cdk.Stack {
     // key encrypts stored credentials and must stay stable across deploys.
     const portalAdminToken = generatedSecret('PortalAdminToken', 'usage-poc-ec2/portal-admin-token', 'Portal admin token for connecting vendor admin APIs');
     const credentialsKey = generatedSecret('CredentialsKey', 'usage-poc-ec2/credentials-key', 'Encryption key for vendor credentials stored by the portal');
+    // Portal sign-in: work email + this code until Microsoft sign-in is set up.
+    const portalAccessCode = generatedSecret('PortalAccessCode', 'usage-poc-ec2/portal-access-code', 'Portal sign-in access code (with a company email)');
     const brokerAdmin = generatedSecret('BrokerAdmin', 'usage-poc-ec2/rabbitmq-admin', 'RabbitMQ admin password');
     const brokerTracker = generatedSecret('BrokerTracker', 'usage-poc-ec2/rabbitmq-tracker', 'RabbitMQ tracker (laptop) password');
     const brokerWorker = generatedSecret('BrokerWorker', 'usage-poc-ec2/rabbitmq-worker', 'RabbitMQ worker password');
@@ -118,7 +122,7 @@ export class UsagePocEc2Stack extends cdk.Stack {
       comment: 'usage-poc-ec2 portal',
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList('X-Client-Id', 'Content-Type', 'Accept', 'X-Admin-Token'),
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
-      cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.allowList('allionone_session', 'allionone_oauth'),
     });
     const distribution = new cloudfront.Distribution(this, 'PortalCdn', {
       comment: 'usage-poc portal (single EC2 host)',
@@ -167,7 +171,7 @@ export class UsagePocEc2Stack extends cdk.Stack {
       // Shell access through Session Manager; no SSH port or key pair.
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')],
     });
-    for (const secret of [mongoUri, openAiKey, brokerTls, serviceToken, originVerify, brokerAdmin, brokerTracker, brokerWorker, portalAdminToken, credentialsKey]) {
+    for (const secret of [mongoUri, openAiKey, brokerTls, serviceToken, originVerify, brokerAdmin, brokerTracker, brokerWorker, portalAdminToken, credentialsKey, portalAccessCode]) {
       secret.grantRead(role);
     }
     // Optional Microsoft Graph credentials for the agent's email intake. Created
@@ -175,7 +179,7 @@ export class UsagePocEc2Stack extends cdk.Stack {
     // adding it later only needs `systemctl restart usage-poc` on the instance.
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
-      resources: [GRAPH_MAIL_SECRET, AI_TOOLS_SECRET].map(
+      resources: [GRAPH_MAIL_SECRET, AI_TOOLS_SECRET, PORTAL_SSO_SECRET].map(
         (name) => `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${name}-??????`
       ),
     }));
@@ -236,6 +240,11 @@ services:
       PORTAL_ADMIN_TOKEN:
       CREDENTIALS_KEY:
       PUBLIC_PORTAL_URL: ${portalUrl}
+      PORTAL_ACCESS_CODE:
+      PORTAL_LOGIN_DOMAINS: alliontechnologies.com
+      PORTAL_SSO_TENANT_ID:
+      PORTAL_SSO_CLIENT_ID:
+      PORTAL_SSO_CLIENT_SECRET:
       GITHUB_OAUTH_CLIENT_ID:
       GITHUB_OAUTH_CLIENT_SECRET:
       ANTHROPIC_ADMIN_KEY:
@@ -315,6 +324,14 @@ export MCP_SERVICE_TOKEN=$(secret ${serviceToken.secretArn})
 export ORIGIN_VERIFY_SECRET=$(secret ${originVerify.secretArn})
 export PORTAL_ADMIN_TOKEN=$(secret ${portalAdminToken.secretArn})
 export CREDENTIALS_KEY=$(secret ${credentialsKey.secretArn})
+export PORTAL_ACCESS_CODE=$(secret ${portalAccessCode.secretArn})
+# "Sign in with Microsoft" appears once the Entra app secret exists.
+if sso=$(secret ${PORTAL_SSO_SECRET} 2>/dev/null); then
+  export PORTAL_SSO_TENANT_ID=$(jq -r .tenantId <<<"$sso")
+  export PORTAL_SSO_CLIENT_ID=$(jq -r .clientId <<<"$sso")
+  export PORTAL_SSO_CLIENT_SECRET=$(jq -r .clientSecret <<<"$sso")
+fi
+unset sso
 # Email intake stays off until the Graph secret exists.
 if mail=$(secret ${GRAPH_MAIL_SECRET} 2>/dev/null); then
   export GRAPH_TENANT_ID=$(jq -r .tenantId <<<"$mail")
@@ -429,6 +446,14 @@ UNIT_EOF`,
     new cdk.CfnOutput(this, 'PortalAdminTokenSecret', {
       value: portalAdminToken.secretName,
       description: 'Connect dialog admin token: aws secretsmanager get-secret-value --secret-id <this> --query SecretString --output text',
+    });
+    new cdk.CfnOutput(this, 'PortalAccessCodeSecret', {
+      value: portalAccessCode.secretName,
+      description: 'Portal sign-in access code: aws secretsmanager get-secret-value --secret-id <this> --query SecretString --output text',
+    });
+    new cdk.CfnOutput(this, 'PortalSsoRedirectUri', {
+      value: `${portalUrl}/api/auth/microsoft/callback`,
+      description: 'Redirect URI (Web platform) for the Entra app behind Sign in with Microsoft',
     });
     new cdk.CfnOutput(this, 'GithubOAuthCallbackUrl', {
       value: `${portalUrl}/api/integrations/copilot/oauth/callback`,

@@ -1,6 +1,8 @@
+import allionLogo from '../assets/allion-logo.png';
+import NetworkCanvas from './NetworkCanvas';
+
 function NavIcon({ type }) {
   const icons = {
-    brand: <><path d="M5.5 7.5h5A2.5 2.5 0 0 1 13 10v1.5A2.5 2.5 0 0 1 10.5 14h-5A2.5 2.5 0 0 1 3 11.5V10a2.5 2.5 0 0 1 2.5-2.5Z" /><path d="M8 7.5V4" /><path d="M6.25 11h.01" /><path d="M9.75 11h.01" /><path d="M6.5 14v1" /><path d="M9.5 14v1" /></>,
     dashboard: <><path d="M3 8a5 5 0 0 1 10 0" /><path d="M4.5 12.5h7" /><path d="m8 8 2.6-2.6" /><path d="M8 8h.01" /></>,
     software: <><path d="M3 4.5h10v7H3z" /><path d="M5 14h6" /><path d="M8 11.5V14" /><path d="M5 7h2" /><path d="M5 9h4" /></>,
     tracker: <><path d="M5 5.5h6v5H5z" /><path d="M8 5.5V3.5" /><path d="M4 8H2.5" /><path d="M13.5 8H12" /><path d="M6.5 8h.01" /><path d="M9.5 8h.01" /><path d="M6 12.5h4" /></>,
@@ -9,6 +11,7 @@ function NavIcon({ type }) {
     approvals: <><path d="M4 3.25h8v9.5H4z" /><path d="m6 8 1.25 1.25L10 6.5" /><path d="M6 11.5h4" /></>,
     inventory: <><path d="M3 4.5 8 2.5l5 2-5 2z" /><path d="M3 4.5v6.5l5 2.25 5-2.25V4.5" /><path d="M8 6.5v6.75" /></>,
     aitools: <><path d="M8 2.75 9.2 6.3l3.55 1.2L9.2 8.7 8 12.25 6.8 8.7 3.25 7.5 6.8 6.3z" /><path d="M12.25 11.25v2.5M11 12.5h2.5" /></>,
+    signout: <><path d="M6.5 3.25h-2.25a1 1 0 0 0-1 1v7.5a1 1 0 0 0 1 1H6.5" /><path d="M9.75 5.25 12.5 8l-2.75 2.75" /><path d="M12.5 8H6.25" /></>,
     settings: <><circle cx="8" cy="8" r="2.25" /><path d="M8 2.25v1.2M8 12.55v1.2M2.25 8h1.2M12.55 8h1.2" /><path d="m3.95 3.95.85.85m6.4 6.4.85.85m0-8.1-.85.85m-6.4 6.4-.85.85" /></>,
   };
 
@@ -23,7 +26,7 @@ function NavIcon({ type }) {
 
 const navigationItems = [
   ['unified-dashboard', 'dashboard', 'Dashboard'],
-  ['dashboard', 'software', 'Software Licsence Management'],
+  ['dashboard', 'software', 'Software License Management'],
   ['agent-management', 'tracker', 'Tracker Management'],
   ['apps-inventory', 'inventory', 'Enterprise Apps Inventory'],
   ['reporting-insights', 'reports', 'Reporting & Insights'],
@@ -38,6 +41,8 @@ export default function AppNavigation({
   onNavigate,
   onOpenSettings,
   onResetCollapse,
+  user,
+  onSignOut,
 }) {
   return (
     <nav
@@ -45,9 +50,10 @@ export default function AppNavigation({
       aria-label="Primary navigation"
       onMouseLeave={onResetCollapse}
     >
+      <NetworkCanvas className="nav-network" area={5000} maxNodes={40} reach={90} />
       <div className="brand-mark">
-        <span className="brand-icon"><NavIcon type="brand" /></span>
-        <span>AgentOps</span>
+        <span className="brand-icon"><img src={allionLogo} alt="" width="34" height="34" /></span>
+        <span className="brand-name">Allion<strong>One</strong></span>
       </div>
       <div className="nav-actions">
         {navigationItems.map(([view, icon, label]) => (
@@ -73,6 +79,12 @@ export default function AppNavigation({
           <span className="nav-glyph"><NavIcon type="settings" /></span>
           <span className="nav-label">Settings</span>
         </button>
+        {onSignOut && (
+          <button className="nav-link" type="button" title={user?.email || ''} onClick={onSignOut}>
+            <span className="nav-glyph"><NavIcon type="signout" /></span>
+            <span className="nav-label">Sign out{user?.name ? ` (${user.name})` : ''}</span>
+          </button>
+        )}
       </div>
     </nav>
   );

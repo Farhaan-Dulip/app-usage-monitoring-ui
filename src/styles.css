@@ -56,7 +56,7 @@ button {
 
 .top-nav:hover,
 .top-nav:focus-within {
-  width: 280px;
+  width: 320px;
   background: rgba(255, 255, 255, 0.74);
   box-shadow: 0 18px 48px rgba(20, 33, 61, 0.16);
 }
@@ -119,10 +119,30 @@ button {
   width: 34px;
   height: 34px;
   place-items: center;
+  overflow: hidden;
   border-radius: 8px;
-  background: #10233f;
+  background: #ffffff;
   color: #ffffff;
   font-size: 0.9rem;
+}
+
+.brand-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.brand-name {
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.brand-name strong {
+  color: #f08c00;
 }
 
 .nav-icon {
@@ -324,7 +344,7 @@ button {
 
 .top-nav:hover .nav-label,
 .top-nav:focus-within .nav-label {
-  max-width: 200px;
+  max-width: 240px;
   opacity: 1;
   transform: translateX(0);
 }
@@ -4576,4 +4596,131 @@ tbody tr:last-child td {
 .reports-content .panel > .muted-value {
   margin-top: 18px;
   margin-bottom: 20px;
+}
+
+/* Navigation panel in the AllionOne sign-in style: dark base, blue glow at the
+   top right, cyan glow down the right side, grid lines fading in from the right. */
+.top-nav,
+.top-nav:hover,
+.top-nav:focus-within,
+.top-nav.nav-collapsed-after-select {
+  overflow: hidden;
+  border-color: rgba(120, 160, 220, 0.14);
+  background:
+    radial-gradient(120% 38% at 100% 0%, rgba(15, 81, 137, 0.75), transparent 70%),
+    radial-gradient(90% 30% at 105% 58%, rgba(22, 172, 216, 0.22), transparent 70%),
+    radial-gradient(80% 22% at 0% 100%, rgba(248, 166, 39, 0.08), transparent 70%),
+    #050b18;
+  box-shadow: 0 18px 48px rgba(5, 11, 24, 0.35);
+}
+
+.top-nav::before {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(120, 160, 220, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 160, 220, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: linear-gradient(270deg, #000 0%, transparent 85%);
+  mask-image: linear-gradient(270deg, #000 0%, transparent 85%);
+  pointer-events: none;
+  content: '';
+}
+
+.top-nav > * {
+  position: relative;
+  z-index: 1;
+}
+
+.top-nav .brand-mark {
+  border-bottom-color: rgba(234, 241, 251, 0.1);
+  color: #ffffff;
+}
+
+.top-nav .brand-name {
+  background: linear-gradient(100deg, #ffffff 10%, #b9d6f5 55%, #ffffff 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.top-nav .brand-name strong {
+  background: linear-gradient(100deg, #f8a627, #ffcf6b 60%, #16acd8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.top-nav .nav-settings {
+  border-top-color: rgba(234, 241, 251, 0.1);
+}
+
+.top-nav .nav-link,
+.top-nav .nav-glyph {
+  color: #9db0c8;
+}
+
+.top-nav .nav-link:hover,
+.top-nav .nav-link:hover .nav-glyph {
+  color: #ffffff;
+}
+
+.top-nav .nav-link:hover::before {
+  background: #16acd8;
+}
+
+.top-nav .nav-link.active {
+  border-color: rgba(22, 172, 216, 0.35);
+  background: linear-gradient(135deg, rgba(22, 172, 216, 0.16), rgba(15, 81, 137, 0.28));
+  color: #ffffff;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.top-nav .nav-link.active .nav-glyph {
+  background: linear-gradient(135deg, #0f5189, #16acd8);
+  color: #ffffff;
+}
+
+.top-nav .nav-link.active::before {
+  background: #16acd8;
+  box-shadow: 0 0 10px rgba(22, 172, 216, 0.8);
+}
+
+.top-nav .nav-link:focus-visible {
+  outline: 2px solid rgba(22, 172, 216, 0.7);
+  outline-offset: 2px;
+}
+
+@media (max-width: 820px) {
+  .top-nav {
+    border-left-color: rgba(120, 160, 220, 0.14);
+  }
+}
+
+/* Logo and AllionOne centred in the panel header, collapsed or expanded. */
+.top-nav .brand-mark,
+.top-nav:hover .brand-mark,
+.top-nav:focus-within .brand-mark,
+.top-nav.nav-collapsed-after-select .brand-mark {
+  justify-content: center;
+}
+
+/* Drifting particles behind the navigation panel (under the grid and items). */
+.top-nav > .nav-network {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Slightly smaller type in the navigation panel. */
+.top-nav .nav-link {
+  font-size: 0.88rem;
+}
+
+.top-nav .brand-name {
+  font-size: 1.06rem;
 }

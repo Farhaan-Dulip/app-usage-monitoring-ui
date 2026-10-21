@@ -186,7 +186,7 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
           {messages.map((message, index) => (
             <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}>
               <div className="assistant-message-label">
-                {message.role === 'assistant' ? 'AgentOps AI' : 'You'}
+                {message.role === 'assistant' ? 'AllionOne AI' : 'You'}
               </div>
               <div className="assistant-message-bubble">
                 {message.content.split('\n').map((line, lineIndex) => (
@@ -211,7 +211,7 @@ export default function ChatAssistant({ backendBaseUrl, clientId }) {
           ))}
           {isSending && (
             <div className="assistant-message assistant">
-              <div className="assistant-message-label">AgentOps AI</div>
+              <div className="assistant-message-label">AllionOne AI</div>
               <div className="assistant-typing" aria-label="Assistant is analyzing">
                 <i /><i /><i />
               </div>

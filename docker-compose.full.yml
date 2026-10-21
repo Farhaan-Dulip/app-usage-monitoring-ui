@@ -68,6 +68,8 @@ services:
       # encrypts stored vendor credentials. Development values; change them here.
       PORTAL_ADMIN_TOKEN: ${PORTAL_ADMIN_TOKEN:-local-admin-token}
       CREDENTIALS_KEY: ${CREDENTIALS_KEY:-local-dev-credentials-key}
+      # Sign-in page: work email + this access code.
+      PORTAL_ACCESS_CODE: ${PORTAL_ACCESS_CODE:-local-access-code}
       PUBLIC_PORTAL_URL: http://localhost:3000
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}

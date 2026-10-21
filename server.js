@@ -33,6 +33,7 @@ import { credentialEnv } from './services/aiTools/credentials.js';
 import { createIntegrationsRouter } from './services/aiTools/integrations.js';
 import { buildDashboard, licenseAppList } from './services/reports/dashboards.js';
 import { buildTrackerReport } from './services/reports/trackerReport.js';
+import { authConfig, createAuthRouter, requireSession } from './services/portalAuth.js';
 import {
   PeopleError,
   buildPeopleReport,
@@ -139,6 +140,19 @@ if (originVerifySecret) {
     return res.status(403).json({ error: 'Forbidden' });
   });
 }
+
+// Portal sign-in (Microsoft Entra ID and/or a POC access code). Trackers posting
+// telemetry over HTTP have no session, so that route stays open.
+const portalAuth = authConfig(process.env);
+const sessionGuard = requireSession({
+  config: portalAuth,
+  serviceToken: mcpServiceToken,
+  serviceHeader: SERVICE_TOKEN_HEADER,
+  isPublic: (req) => req.method === 'POST' && req.path === '/telemetry',
+});
+app.use('/api/auth', createAuthRouter({ express, config: portalAuth }));
+app.use('/api', sessionGuard);
+app.use('/send-email-summary', sessionGuard);
 
 function assistantAppName(record) {
   return record?.appName || record?.app_name || record?.name || record?.application || '';
