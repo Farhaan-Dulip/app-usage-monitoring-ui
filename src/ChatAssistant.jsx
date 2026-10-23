@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import AllionMark from './components/AllionMark';
 
 const REQUESTER_PROFILE_STORAGE_KEY = 'app-usage-monitoring-requester-profile';
+// The left panel collapsed to a slim rail (remembered per browser).
+const SIDEBAR_STORAGE_KEY = 'allionone-assistant-sidebar-collapsed';
 // Recent chats are kept in this browser only (per signed-in user).
 const HISTORY_STORAGE_PREFIX = 'allionone-chat-history';
 const HISTORY_LIMIT = 30;
@@ -39,6 +41,19 @@ function relativeTime(timestamp) {
   return days === 1 ? 'Yesterday' : `${days} days ago`;
 }
 
+// Same drawer icon as the navigation panel's keep-open toggle.
+function DrawerIcon({ open }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" width="16" height="16">
+      <g stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.4">
+        <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="2" />
+        <path d="M6 2.75v10.5" />
+        {open ? <path d="m10.75 6.25-1.75 1.75 1.75 1.75" /> : <path d="m9 6.25 1.75 1.75L9 9.75" />}
+      </g>
+    </svg>
+  );
+}
+
 function SendIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -57,6 +72,7 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
   const [error, setError] = useState('');
   const [requests, setRequests] = useState([]);
   const [requester, setRequester] = useState(() => readStorage(REQUESTER_PROFILE_STORAGE_KEY, { name: '', email: '' }));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStorage(SIDEBAR_STORAGE_KEY, false) === true);
   const messageEndRef = useRef(null);
   const composerRef = useRef(null);
 
@@ -74,6 +90,10 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
   useEffect(() => {
     writeStorage(REQUESTER_PROFILE_STORAGE_KEY, requester);
   }, [requester]);
+
+  useEffect(() => {
+    writeStorage(SIDEBAR_STORAGE_KEY, sidebarCollapsed);
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     composerRef.current?.focus();
@@ -193,8 +213,35 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
   };
 
   return (
-    <section className="assistant-workspace" aria-label="AI license assistant">
+    <section className={sidebarCollapsed ? 'assistant-workspace sidebar-collapsed' : 'assistant-workspace'} aria-label="AI license assistant">
       <aside className="assistant-sidebar">
+        <div className="assistant-sidebar-top">
+          <button
+            className="assistant-sidebar-toggle"
+            type="button"
+            aria-expanded={!sidebarCollapsed}
+            aria-label={sidebarCollapsed ? 'Expand panel' : 'Collapse panel'}
+            title={sidebarCollapsed ? 'Expand panel' : 'Collapse panel'}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            <DrawerIcon open={!sidebarCollapsed} />
+          </button>
+        </div>
+        {/* Both views stay mounted so the width change animates smoothly: the
+            full panel fades out as the rail's New chat button fades in. */}
+        <button
+          className="assistant-new-chat assistant-new-chat-icon"
+          type="button"
+          aria-label="New chat"
+          title="New chat"
+          tabIndex={sidebarCollapsed ? 0 : -1}
+          aria-hidden={!sidebarCollapsed}
+          onClick={() => openConversation(null)}
+          disabled={!active}
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+        <div className="assistant-sidebar-full" aria-hidden={sidebarCollapsed} inert={sidebarCollapsed ? '' : undefined}>
         <button className="assistant-new-chat" type="button" onClick={() => openConversation(null)} disabled={!active}>
           <span aria-hidden="true">+</span> New chat
         </button>
@@ -258,6 +305,7 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
           ) : (
             <p>No requests in this portal session.</p>
           )}
+        </div>
         </div>
       </aside>
 

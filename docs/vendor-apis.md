@@ -4,7 +4,7 @@ What each app's admin API offers, how the portal signs in to it (Connect
 dialog), which endpoints the portal calls, and what it uses them for.
 
 **Status** column:
-- **Live data**: the portal pulls this vendor's data once connected: AI tools on the AI Tools page (`services/aiTools/<vendor>.js`), the others on their Reports & Insights > Enterprise App Licenses dashboard (`services/reports/licenseConnectors.js`). Until then the dashboard shows sample data in the same response format.
+- **Live data**: the portal pulls this vendor's data once connected: AI tools on the AI Tools page (`services/aiTools/<vendor>.js`), the others on their Reports & Insights > End User Apps dashboard (`services/reports/licenseConnectors.js`). Until then the dashboard shows sample data in the same response format.
 - **Credential check**: Connect checks and stores the credential; its data is not pulled in yet.
 - **Stored, unchecked**: no call could be confirmed, so the credential is stored with a warning.
 - **No admin API**: nothing to connect; the Tracker's measurements on each PC are the only data.
@@ -143,3 +143,25 @@ guides were available.
 - **Fields per vendor and encrypted storage:** `services/aiTools/credentials.js`.
 - **Connect API and GitHub OAuth:** `services/aiTools/integrations.js`.
 - **Dialog text per vendor:** `src/components/ConnectDialog.jsx`.
+
+## Enterprise Infrastructure Platform (phase 1: sample data)
+
+Reports & Insights > Enterprise Infrastructure Platform shows cost monitoring,
+infra insights, contracts and renewal periods per platform. It is read-only.
+The data is **sample data in each API's response format**
+(`services/platforms/samples.js`), built by the same code a live connection
+will use (`services/platforms/index.js`). Live connectors are the next step.
+
+| Platform | Planned sign-in | Calls the dashboard is built from |
+|---|---|---|
+| Microsoft Azure | Entra ID app: Cost Management Reader, Reader, Reservations Reader | Cost Management `query` (daily by service, MTD by resource group) and `forecast`; Consumption `budgets`; Advisor `recommendations` (Cost); Resource Graph (orphaned disks, public IPs, snapshots, load balancers); Capacity `reservations` (utilization, expiry, renew) |
+| Snowflake | Service user with key-pair (JWT) auth, `ORGADMIN`/`ACCOUNTADMIN` usage views | SQL API `POST /api/v2/statements` on `ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY`, `CONTRACT_ITEMS`, `REMAINING_BALANCE_DAILY`; `SHOW WAREHOUSES` with `WAREHOUSE_METERING_HISTORY` (idle credits) |
+| Datadog | API key + application key with `usage_read`, `hosts_read` | `GET /api/v2/usage/estimated_cost`, `projected_cost`, `historical_cost`, `hourly_usage`; `GET /api/v1/hosts` |
+| Atlassian | Organization admin API key | `GET /admin/v1/orgs/{orgId}/users` (product access, last active), `GET /admin/v2/orgs/{orgId}/workspaces`. No public billing API: cost comes from the contract's price per user tier |
+
+**Contracts** are contract data: each platform shows a sample contract until
+one is saved in the portal (`platform_contracts`). Facts an API returns win
+over the sample (Snowflake contract amount and dates, Azure reservation
+expiries); a saved contract wins over both. **Renewal status** is by days to
+the **notice deadline** (end date minus notice period): due within 30 days,
+soon within 90, otherwise later.

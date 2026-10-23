@@ -19,6 +19,16 @@ const STATUS = {
   active: { label: 'Active', className: 'status-active' },
   idle: { label: 'Idle', className: 'status-reclaimable' },
   never: { label: 'No activity', className: 'status-neutral' },
+  // Recommendation impact (Enterprise Infrastructure Platform).
+  high: { label: 'High', className: 'status-reclaimable' },
+  medium: { label: 'Medium', className: 'status-observing' },
+  low: { label: 'Low', className: 'status-neutral' },
+  // Renewal status: by days to the notice deadline.
+  due: { label: 'Notice due', className: 'status-reclaimable' },
+  soon: { label: 'Within 90 days', className: 'status-observing' },
+  later: { label: 'Later', className: 'status-active' },
+  locked: { label: 'Notice passed', className: 'status-neutral' },
+  expired: { label: 'Expired', className: 'status-neutral' },
 };
 export const MODE = {
   live: { label: 'Live', className: 'status-active' },
@@ -74,7 +84,7 @@ function ChartCard({ chart }) {
               <Pie data={chart.data} dataKey="value" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
                 {chart.data.map((entry, index) => <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />)}
               </Pie>
-              <Tooltip />
+              <Tooltip formatter={chart.format ? (value) => formatValue(value, chart.format) : undefined} />
               <Legend />
             </PieChart>
           ) : chart.type === 'bar' ? (

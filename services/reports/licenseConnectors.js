@@ -1,4 +1,4 @@
-// Live data connectors for the Enterprise App Licenses dashboards. Each
+// Live data connectors for the End User Apps dashboards. Each
 // fetch*Raw() returns the same shape as its sample in vendorSamples.js (which
 // copies the vendor's response format), so dashboards.js builds live and
 // sample dashboards with the same code. Credentials come from the Connect

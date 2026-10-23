@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import AppInventoryIcon from '../AppInventoryIcon';
 import { ChartGrid, DataTable, KpiCards, MODE, formatValue } from './DashboardView';
+import { PlatformDashboard, PlatformsOverview } from './PlatformsView';
 
 const BACKEND_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -36,7 +37,8 @@ function Breadcrumb({ items }) {
 }
 
 const HUB_CARDS = [
-  { id: 'licenses', title: 'Enterprise App Licenses', text: 'Seats, spend, activity and reclaim candidates for each licensed app, from its vendor admin API and the Trackers.', icon: '▦' },
+  { id: 'licenses', title: 'End User Apps', text: 'Seats, spend, activity and reclaim candidates for each licensed app, from its vendor admin API and the Trackers.', icon: '▦' },
+  { id: 'platforms', title: 'Enterprise Infrastructure Platform', text: 'Cost, infrastructure insights, contracts and renewal deadlines for Azure, Snowflake, Datadog and Atlassian.', icon: '◈' },
   { id: 'tracker', title: 'Tracker Usage', text: 'What the Trackers measured on PCs in the last 30 days: active and idle time by app, PC and day.', icon: '◷' },
   { id: 'ai-tools', title: 'AI Tools & Agents', text: 'Review connected AI tools, agent usage, seat activity, and integration health.', icon: '✦' },
   { id: 'builder', title: 'Custom Report Builder', text: 'Create a tailored report from the inventory, license, usage, and reclaim data that matters to your team.', icon: '≡' },
@@ -112,7 +114,7 @@ function LicenseApps({ onOpenApp }) {
     <section className="panel">
       <div className="panel-header">
         <div>
-          <h2>Enterprise App Licenses</h2>
+          <h2>End User Apps</h2>
           <p>Choose an app to see its licence dashboard.</p>
         </div>
         <SectionTotal count={data.apps.length} cost={totalCost} />
@@ -377,23 +379,26 @@ function TrackerUsage() {
   );
 }
 
-// Reports & Insights: card hub > Enterprise App Licenses (apps > app dashboard),
+// Reports & Insights: card hub > End User Apps (apps > app dashboard),
 // Tracker Usage, and the existing Report Builder (passed in as `builder`).
 export default function ReportsInsights({ builder }) {
   const [view, setView] = useState('hub');
   const [app, setApp] = useState(null);
   const [tool, setTool] = useState(null);
-  const home = { label: 'Reports & Insights', onClick: () => { setView('hub'); setApp(null); } };
+  const [platform, setPlatform] = useState(null);
+  const home = { label: 'Reports & Insights', onClick: () => { setView('hub'); setApp(null); setPlatform(null); } };
   const crumbs = {
     hub: [{ label: 'Reports & Insights' }],
-    licenses: [home, { label: 'Enterprise App Licenses' }],
-    app: [home, { label: 'Enterprise App Licenses', onClick: () => { setView('licenses'); setApp(null); } }, { label: app?.name || '' }],
+    licenses: [home, { label: 'End User Apps' }],
+    app: [home, { label: 'End User Apps', onClick: () => { setView('licenses'); setApp(null); } }, { label: app?.name || '' }],
+    platforms: [home, { label: 'Enterprise Infrastructure Platform' }],
+    platform: [home, { label: 'Enterprise Infrastructure Platform', onClick: () => { setView('platforms'); setPlatform(null); } }, { label: platform?.name || '' }],
     tracker: [home, { label: 'Tracker Usage' }],
     builder: [home, { label: 'Report Builder' }],
     'ai-tools': [home, { label: 'AI Tools & Agents' }],
     'ai-tool': [home, { label: 'AI Tools & Agents', onClick: () => { setView('ai-tools'); setTool(null); } }, { label: tool?.name || '' }],
   };
-  useEffect(() => { window.scrollTo?.({ top: 0 }); }, [view, app]);
+  useEffect(() => { window.scrollTo?.({ top: 0 }); }, [view, app, platform]);
 
   return (
     <div className="reports-content">
@@ -403,6 +408,8 @@ export default function ReportsInsights({ builder }) {
       {view === 'app' && app && <AppDashboard app={app} />}
       {view === 'ai-tools' && <AiToolsAgents onOpenTool={(selected) => { setTool(selected); setView('ai-tool'); }} />}
       {view === 'ai-tool' && tool && <AiToolDashboard tool={tool} />}
+      {view === 'platforms' && <PlatformsOverview onOpenPlatform={(selected) => { setPlatform(selected); setView('platform'); }} />}
+      {view === 'platform' && platform && <PlatformDashboard platform={platform} />}
       {view === 'tracker' && <TrackerUsage />}
       {view === 'builder' && builder}
     </div>

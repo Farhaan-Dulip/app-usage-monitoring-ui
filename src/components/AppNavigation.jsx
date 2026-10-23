@@ -55,7 +55,7 @@ const navigationItems = [
   ['agent-management', 'tracker', 'Tracker Management'],
   ['apps-inventory', 'inventory', 'Enterprise Apps Inventory'],
   ['reporting-insights', 'reports', 'Reporting & Insights'],
-  ['license-approvals', 'approvals', 'License Approvals'],
+  ['license-approvals', 'approvals', 'Request Approvals'],
   ['ai-assistant', 'assistant', 'AI Assistant'],
 ];
 

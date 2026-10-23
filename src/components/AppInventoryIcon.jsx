@@ -1,11 +1,14 @@
 import {
+  siAtlassian,
   siClaude,
+  siDatadog,
   siCursor,
   siDocker,
   siFigma,
   siGithubcopilot,
   siIntellijidea,
   siPostman,
+  siSnowflake,
   siZoom,
 } from 'simple-icons';
 
@@ -25,6 +28,9 @@ const LOGOS = {
   zoom: siZoom,
   'github copilot': siGithubcopilot,
   'github copilot (github.com)': siGithubcopilot,
+  snowflake: siSnowflake,
+  datadog: siDatadog,
+  atlassian: siAtlassian,
 };
 
 const APP_ICON_DETAILS = {
@@ -45,6 +51,11 @@ const APP_ICON_DETAILS = {
   'github copilot': { label: '⌘', color: '#24292f' },
   codex: { label: 'C', color: '#10a37f' },
   'github copilot (github.com)': { label: '⌘', color: '#24292f' },
+  // Microsoft's brands are not in Simple Icons: a lettered tile in Azure blue.
+  'microsoft azure': { label: 'Az', color: '#0078d4' },
+  snowflake: { label: 'S', color: '#29b5e8' },
+  datadog: { label: 'D', color: '#632ca6' },
+  atlassian: { label: 'A', color: '#0052cc' },
 };
 
 export default function AppInventoryIcon({ appName, className = '' }) {

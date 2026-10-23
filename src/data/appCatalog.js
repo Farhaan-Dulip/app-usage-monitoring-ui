@@ -10,11 +10,17 @@
 // connector: the vendor whose admin API the Connect dialog signs in to (or, for
 // vscode / visual-studio, explains that there is none).
 
-export const CATALOG_SECTIONS = [
-  { type: 'Application', title: 'Applications', description: 'Desktop apps the Tracker recognises by process name.' },
-  { type: 'Extension', title: 'Extensions', description: 'AI assistants that run inside another app (the parent app must be in your inventory first).' },
-  { type: 'Web URL', title: 'Web Apps', description: 'Browser-based tools the Tracker recognises by site address.' },
+// Recognised apps modal: three groups, shown one after the other.
+export const CATALOG_GROUPS = [
+  { id: 'end-user', title: 'End User Apps', description: 'Software people use, licensed per seat, recognised on PCs by process name.' },
+  { id: 'platform', title: 'Enterprise Infra Platform', description: 'Cloud and platform services, licensed by consumption or commitment. Tracked through their admin APIs, not on PCs.' },
+  { id: 'ai', title: 'AI Agents & Tools', description: 'AI assistants and coding agents: desktop apps and extensions inside another app.' },
 ];
+
+export function catalogGroup(entry) {
+  if (entry.appType === 'Platform') return 'platform';
+  return String(entry.category).startsWith('AI') ? 'ai' : 'end-user';
+}
 
 export const APP_CATALOG = [
   // Applications
@@ -33,6 +39,12 @@ export const APP_CATALOG = [
   // Extensions (detected inside the parent app's process tree)
   { id: 'github-copilot', connector: 'copilot', appType: 'Extension', appName: 'GitHub Copilot', processName: 'github-copilot', parentApp: 'Visual Studio Code', subscriptionType: 'Copilot Enterprise', publisher: 'GitHub', category: 'AI assistant', verified: false, note: 'Built-in detection rule for the Copilot extension host in VS Code.' },
   { id: 'codex-vscode', connector: 'codex', appType: 'Extension', appName: 'Codex', processName: 'codex', parentApp: 'Visual Studio Code', subscriptionType: 'ChatGPT Enterprise', publisher: 'OpenAI', category: 'AI assistant', verified: false, note: 'Built-in detection rule (codex.exe / codex in VS Code).' },
+
+  // Enterprise infrastructure platforms (admin APIs; no Tracker detection)
+  { id: 'azure', connector: 'azure', appType: 'Platform', appName: 'Microsoft Azure', api: 'Azure Cost Management, Advisor, Resource Graph', publisher: 'Microsoft', category: 'Cloud infrastructure', verified: false },
+  { id: 'snowflake', connector: 'snowflake', appType: 'Platform', appName: 'Snowflake', api: 'Snowflake SQL API (organization usage)', publisher: 'Snowflake', category: 'Data platform', verified: false },
+  { id: 'datadog', connector: 'datadog', appType: 'Platform', appName: 'Datadog', api: 'Datadog Usage Metering API', publisher: 'Datadog', category: 'Observability', verified: false },
+  { id: 'atlassian', connector: 'atlassian', appType: 'Platform', appName: 'Atlassian', api: 'Atlassian Organizations REST API', publisher: 'Atlassian', category: 'Collaboration platform', verified: false },
 
   // Web apps
   { id: 'claude-web', connector: 'claude', appType: 'Web URL', appName: 'Claude (web)', url: 'claude.ai', publisher: 'Anthropic', category: 'AI assistant', verified: false },

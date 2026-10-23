@@ -61,7 +61,7 @@ export async function testCredentials(vendor, values, { fetch: fetchImpl = fetch
 // Where a vendor's live data shows once connected (null: stored only).
 function dataPage(vendor) {
   if (DATA_CONNECTORS.has(vendor)) return 'AI Tools';
-  if (LICENSE_DATA_CONNECTORS.has(vendor)) return 'Reports & Insights > Enterprise App Licenses';
+  if (LICENSE_DATA_CONNECTORS.has(vendor)) return 'Reports & Insights > End User Apps';
   return null;
 }
 

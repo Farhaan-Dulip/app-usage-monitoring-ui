@@ -17,6 +17,19 @@ export const INTEGRATION_NAMES = {
   docker: 'Docker',
   vscode: 'Visual Studio Code',
   'visual-studio': 'Visual Studio',
+  azure: 'Microsoft Azure',
+  snowflake: 'Snowflake',
+  datadog: 'Datadog',
+  atlassian: 'Atlassian',
+};
+
+// Enterprise Infra Platform: dashboards run on sample data in each API's
+// format; the read-only connection is the next step.
+export const PLATFORM_PLANNED = {
+  azure: 'Read-only through a Microsoft Entra ID app with Cost Management Reader, Reader and Reservations Reader roles: actual cost, budgets and forecast, Advisor recommendations, orphaned resources and reservations (including Azure Databricks).',
+  snowflake: 'Read-only through a Snowflake service user with key-pair authentication on the SQL API: organization usage in currency, contract items, remaining balance and warehouse credits.',
+  datadog: 'Read-only through a Datadog API key and an application key with usage_read and hosts_read: estimated, projected and historical cost, hourly usage and hosts.',
+  atlassian: "Read-only through an Atlassian organization admin API key: users with product access and last activity, and the organization's products. Pricing comes from your contract (no public billing API).",
 };
 
 // Apps without an admin API: the dialog explains where their seats are managed.
@@ -123,6 +136,7 @@ export function useIntegrations() {
 
 export function integrationBadge(vendorStatus, vendor) {
   if (NO_API[vendor]) return { label: 'No admin API', className: 'status-neutral' };
+  if (PLATFORM_PLANNED[vendor]) return { label: 'Sample data', className: 'status-observing' };
   if (!vendorStatus) return { label: 'Not connected', className: 'status-neutral' };
   if (vendorStatus.problem) return { label: 'Reconnect needed', className: 'status-reclaimable' };
   if (vendorStatus.connected) return { label: vendorStatus.source === 'portal' ? 'Connected' : 'Connected (server)', className: 'status-active' };
@@ -130,6 +144,23 @@ export function integrationBadge(vendorStatus, vendor) {
 }
 
 export default function ConnectDialog({ vendor, status, canConnect, onClose, onChanged }) {
+  if (PLATFORM_PLANNED[vendor]) {
+    return (
+      <div className="app-catalog-backdrop connect-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+        <section className="app-catalog-modal connect-dialog" role="dialog" aria-modal="true" aria-labelledby="connect-title">
+          <div className="app-catalog-modal-header">
+            <div>
+              <p className="eyebrow">Connection coming next</p>
+              <h2 id="connect-title">{INTEGRATION_NAMES[vendor]}</h2>
+              <p>{PLATFORM_PLANNED[vendor]}</p>
+              <p>Its Reports &amp; Insights dashboard shows sample data in this API's response format until the connection is built.</p>
+            </div>
+            <button className="settings-close-button" type="button" aria-label="Close" onClick={onClose}>&times;</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
   if (NO_API[vendor]) {
     return (
       <div className="app-catalog-backdrop connect-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>

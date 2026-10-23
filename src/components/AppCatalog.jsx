@@ -1,12 +1,11 @@
 import { useMemo, useState } from 'react';
-import { APP_CATALOG, inventoryMatch } from '../data/appCatalog';
+import { APP_CATALOG, CATALOG_GROUPS, catalogGroup, inventoryMatch } from '../data/appCatalog';
 import AppInventoryIcon from './AppInventoryIcon';
 import ConnectDialog, { integrationBadge, useIntegrations } from './ConnectDialog';
 
-const TYPE_ICON = { Application: '▣', Extension: '⧉', 'Web URL': '◎' };
-
-// Recognised apps: how the Tracker detects each one, whether it is already in
-// the inventory, and Connect for apps whose vendor admin API is integrated.
+// Recognised apps in three groups (End User Apps, Enterprise Infra Platform,
+// AI Agents & Tools): how each is detected or connected, and Connect for its
+// vendor admin API.
 export default function AppCatalog({ inventory, isOpen, onClose }) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
@@ -14,12 +13,12 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
   const [integrations, reloadIntegrations] = useIntegrations();
   const vendorStatus = (vendor) => integrations?.vendors.find((item) => item.vendor === vendor);
   const categories = useMemo(
-    () => [...new Set(APP_CATALOG.filter((entry) => entry.appType === 'Application').map((entry) => entry.category))].sort(),
+    () => [...new Set(APP_CATALOG.map((entry) => entry.category))].sort(),
     []
   );
 
   const matches = (entry) => {
-    const text = `${entry.appName} ${entry.publisher} ${entry.processName || ''} ${entry.url || ''}`.toLowerCase();
+    const text = `${entry.appName} ${entry.publisher} ${entry.processName || ''} ${entry.url || ''} ${entry.api || ''}`.toLowerCase();
     return (!search || text.includes(search.trim().toLowerCase())) && (!category || entry.category === category);
   };
 
@@ -46,7 +45,7 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
         <div className="catalog-filters">
           <label className="filter-control">
             <span>Search</span>
-            <input type="search" placeholder="Postman, Copilot…" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <input type="search" placeholder="Postman, Azure, Copilot…" value={search} onChange={(event) => setSearch(event.target.value)} />
           </label>
           <label className="filter-control">
             <span>Category</span>
@@ -56,13 +55,18 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
             </select>
           </label>
         </div>
-      <div className="catalog-section">
+      {CATALOG_GROUPS.map((group) => {
+        // Web apps stay in the catalog (the inventory form's app picker uses them) but not as cards here.
+        const entries = APP_CATALOG.filter((entry) => entry.appType !== 'Web URL' && catalogGroup(entry) === group.id && matches(entry));
+        if (!entries.length) return null;
+        return (
+      <div className="catalog-section" key={group.id}>
         <div className="catalog-section-header">
-          <h3>Applications</h3>
-          <small>Desktop apps the Tracker recognises by process name.</small>
+          <h3>{group.title}</h3>
+          <small>{group.description}</small>
         </div>
         <div className="catalog-grid">
-          {APP_CATALOG.filter((entry) => entry.appType === 'Application' && matches(entry)).map((entry) => {
+          {entries.map((entry) => {
                 const existing = inventoryMatch(entry, inventory);
                 return (
                   <article className={`catalog-card${existing ? ' catalog-card-added' : ''}`} key={entry.id}>
@@ -71,13 +75,15 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
                         <AppInventoryIcon appName={entry.appName} className="catalog-icon" />
                       <div>
                         <strong>{entry.appName}</strong>
-                        <small>{entry.publisher} · {entry.category}</small>
+                        <small title={`${entry.publisher} · ${entry.category}`}>{entry.publisher} · {entry.category}</small>
                       </div>
                     </div>
                     <dl className="catalog-detection">
-                      <dt>{entry.appType === 'Web URL' ? 'Site' : entry.appType === 'Extension' ? 'Detected as' : 'Process'}</dt>
-                      <dd><code>{entry.url || entry.processName}</code></dd>
-                      {entry.parentApp && (<><dt>Runs in</dt><dd>{entry.parentApp}</dd></>)}
+                      <dt>{entry.appType === 'Platform' ? 'API' : entry.appType === 'Web URL' ? 'Site' : entry.appType === 'Extension' ? 'Detected as' : 'Process'}</dt>
+                      {entry.appType === 'Platform'
+                        ? <dd className="catalog-api" title={entry.api}>{entry.api}</dd>
+                        : <dd title={entry.url || entry.processName}><code>{entry.url || entry.processName}</code></dd>}
+                      {entry.parentApp && (<><dt>Runs in</dt><dd title={entry.parentApp}>{entry.parentApp}</dd></>)}
                     </dl>
                     {entry.note && <small className="catalog-note">{entry.note}</small>}
                     </div>
@@ -94,6 +100,9 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
           })}
         </div>
       </div>
+        );
+      })}
+      {!APP_CATALOG.some((entry) => entry.appType !== 'Web URL' && matches(entry)) && <p className="muted-value">No recognised app matches your search.</p>}
       </div>
     </section>
     {connecting && (

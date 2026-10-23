@@ -1,4 +1,4 @@
-// Reports & Insights > Enterprise App Licenses: one dashboard per app.
+// Reports & Insights > End User Apps: one dashboard per app.
 //
 // Each dashboard = { app, mode, api, kpis, charts, table, tracker, notes }:
 //   mode 'live'    vendor admin API data (licenseConnectors.js), when connected
@@ -13,7 +13,7 @@ import { LICENSE_CONNECTORS, loadLicenseData } from './licenseConnectors.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
-// Apps on the Enterprise App Licenses page (one per vendor product).
+// Apps on the End User Apps page (one per vendor product).
 export const LICENSE_APPS = [
   { id: 'slack', name: 'Slack', vendor: 'Salesforce', source: 'sample', processes: ['slack.exe'] },
   { id: 'zoom', name: 'Zoom', vendor: 'Zoom', source: 'sample', processes: ['zoom.exe'] },

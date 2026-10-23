@@ -33,6 +33,7 @@ import { credentialEnv } from './services/aiTools/credentials.js';
 import { createIntegrationsRouter } from './services/aiTools/integrations.js';
 import { buildDashboard, licenseAppList } from './services/reports/dashboards.js';
 import { clearLicenseCache } from './services/reports/licenseConnectors.js';
+import { buildPlatformDashboard, ContractError, deleteContract, platformOverview, saveContract, savedContracts } from './services/platforms/index.js';
 import { buildTrackerReport } from './services/reports/trackerReport.js';
 import { authConfig, createAuthRouter, requireSession } from './services/portalAuth.js';
 import {
@@ -99,6 +100,8 @@ const peopleDirectory = database.collection('ai_people_directory');
 // Vendor admin credentials connected from the portal (encrypted).
 const integrationCredentials = database.collection('integration_credentials');
 const aiToolBudgets = database.collection('ai_tool_budgets');
+// Enterprise Infrastructure Platform contracts edited in the portal.
+const platformContracts = database.collection('platform_contracts');
 // Approved licenses waiting to be pushed to Trackers (published by the worker).
 const deviceConfigOutbox = database.collection('device_config_outbox');
 const recordCollections = {
@@ -949,6 +952,48 @@ app.get('/api/reports/apps/:appId', async (req, res) => {
   } catch (error) {
     console.error('App dashboard failed:', error.message);
     return res.status(500).json({ error: 'Unable to build the dashboard' });
+  }
+});
+
+// Reports & Insights > Enterprise Infrastructure Platform (phase 1, read-only).
+app.get('/api/platforms', async (_req, res) => {
+  try {
+    return res.json(platformOverview({ saved: await savedContracts(platformContracts) }));
+  } catch (error) {
+    console.error('Platform overview failed:', error.message);
+    return res.status(500).json({ error: 'Unable to load platforms' });
+  }
+});
+
+app.get('/api/platforms/:platformId', async (req, res) => {
+  try {
+    const dashboard = buildPlatformDashboard(req.params.platformId, { saved: await savedContracts(platformContracts) });
+    if (!dashboard) return res.status(404).json({ error: 'Unknown platform' });
+    return res.json(dashboard);
+  } catch (error) {
+    console.error('Platform dashboard failed:', error.message);
+    return res.status(500).json({ error: 'Unable to build the platform dashboard' });
+  }
+});
+
+app.put('/api/platforms/:platformId/contract', async (req, res) => {
+  try {
+    const contract = await saveContract(platformContracts, req.params.platformId, req.body || {});
+    return res.json({ contract });
+  } catch (error) {
+    if (error instanceof ContractError) return res.status(400).json({ error: error.message });
+    console.error('Saving a platform contract failed:', error.message);
+    return res.status(500).json({ error: 'Unable to save the contract' });
+  }
+});
+
+app.delete('/api/platforms/:platformId/contract', async (req, res) => {
+  try {
+    await deleteContract(platformContracts, req.params.platformId);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Removing a platform contract failed:', error.message);
+    return res.status(500).json({ error: 'Unable to remove the contract' });
   }
 });
 

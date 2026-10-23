@@ -5,6 +5,8 @@ import AiToolsView, { UserAiTools } from './components/AiToolsView';
 import AppCatalog from './components/AppCatalog';
 import AppNamePicker from './components/AppNamePicker';
 import ReportsInsights from './components/reports/ReportsInsights';
+import { ChartGrid } from './components/reports/DashboardView';
+import { AiToolLicenses, LicenseCategoryTabs, PlatformLicenses } from './components/LicenseCategories';
 import NetworkCanvas from './components/NetworkCanvas';
 import CustomReportBuilder from './components/reports/CustomReportBuilder';
 import AppInventoryIcon from './components/AppInventoryIcon';
@@ -2367,8 +2369,8 @@ export default function App({ user = null, onSignOut = null }) {
         'Seats, spend, activity and reclaim candidates for Claude, Codex and GitHub Copilot from each vendor admin API.',
     },
     'license-approvals': {
-      eyebrow: 'License request governance',
-      title: 'License Approvals',
+      eyebrow: 'Request Approval Governance',
+      title: 'Approvals',
       description:
         'Review requests routed to each app owner or administrator during license onboarding.',
     },
@@ -3566,13 +3568,28 @@ export default function App({ user = null, onSignOut = null }) {
     };
   }, []);
 
+  // Enterprise Infrastructure Platform (Azure, Snowflake, Datadog, Atlassian):
+  // its monthly forecast and identified savings replace the older placeholder
+  // cloud figures in the dashboard totals.
+  const [platformStats, setPlatformStats] = useState(null);
+  // License Utilizations capsules: End User (the original page), Platform, AI.
+  const [licenseCategory, setLicenseCategory] = useState('end-user');
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND_BASE_URL}/api/platforms`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => { if (!cancelled && payload) setPlatformStats(payload); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const unifiedSummary = useMemo(() => {
-    const totalManagedSpend =
-      TOTAL_MONTHLY_SOFTWARE_SPEND + cloudSummary.monthlyBurn;
-    const combinedMonthlyWaste =
-      aggregates.totalWaste +
-      cloudSummary.zombieWaste +
-      cloudSummary.rightSizingSavings;
+    const platformSpend = platformStats?.totals.forecastCost || 0;
+    const platformSavings = platformStats?.totals.savingsMonthly || 0;
+    // AI tools & agents: this month's figure from the spend trend (sample).
+    const aiToolsSpend = unifiedSpendTrend[unifiedSpendTrend.length - 1].aiAgents;
+    const totalManagedSpend = TOTAL_MONTHLY_SOFTWARE_SPEND + aiToolsSpend + platformSpend;
+    const combinedMonthlyWaste = aggregates.totalWaste + platformSavings;
     const optimizationScore =
       totalManagedSpend > 0
         ? Math.max(
@@ -3581,12 +3598,32 @@ export default function App({ user = null, onSignOut = null }) {
           )
         : 0;
 
+    const nextRenewal = platformStats?.renewals.find((item) => item.daysToNotice >= 0) || null;
+
     return {
       totalManagedSpend,
       combinedMonthlyWaste,
       optimizationScore,
+      platformSpend,
+      platformSavings,
+      aiToolsSpend,
+      spendSplit: [
+        { name: 'Enterprise Infra Platform', value: Math.round(platformSpend) },
+        { name: 'AI Tools & Agents', value: aiToolsSpend },
+        { name: 'End User Apps', value: TOTAL_MONTHLY_SOFTWARE_SPEND },
+      ].filter((slice) => slice.value > 0),
+      noticeIn90: platformStats?.totals.noticeIn90 || 0,
+      nextRenewal,
     };
-  }, [aggregates.totalWaste, cloudSummary]);
+  }, [aggregates.totalWaste, platformStats]);
+
+  // Six-month trend: the platform line ends at this month's forecast; earlier
+  // months follow the same illustrative growth as the other sample series.
+  const spendTrend = useMemo(() => {
+    const current = platformStats?.totals.forecastCost || 0;
+    const shape = [0.84, 0.87, 0.9, 0.93, 0.97, 1];
+    return unifiedSpendTrend.map((month, index) => ({ ...month, enterprisePlatforms: Math.round(current * shape[index]) }));
+  }, [platformStats]);
 
   const topSavingsOpportunities = useMemo(
     () =>
@@ -3631,8 +3668,19 @@ export default function App({ user = null, onSignOut = null }) {
           detail: 'Shift named seats into a pooled developer allocation',
           tone: 'success',
         },
-      ].sort((firstItem, secondItem) => secondItem.impact - firstItem.impact),
-    []
+        ...(platformStats?.opportunities || []).map((item) => ({
+          id: item.id,
+          domain: 'Enterprise Platform',
+          action: item.action,
+          impact: Math.round(item.impact),
+          detail: item.detail,
+          tone: 'warning',
+        })),
+      ]
+        .filter((item) => item.domain !== 'Cloud')
+        .sort((firstItem, secondItem) => secondItem.impact - firstItem.impact)
+        .slice(0, 5),
+    [platformStats]
   );
 
   const selectedReportTemplate = useMemo(
@@ -4574,12 +4622,16 @@ export default function App({ user = null, onSignOut = null }) {
             <article className="north-star-card">
               <span>Total Managed Spend</span>
               <strong>{formatCurrency(unifiedSummary.totalManagedSpend)}</strong>
-              <small>Desktop licenses plus current cloud monthly burn</small>
+              <small>
+                End user apps, {formatCurrency(unifiedSummary.aiToolsSpend)} AI tools & agents and {formatCurrency(unifiedSummary.platformSpend)} enterprise platforms (monthly)
+              </small>
             </article>
             <article className="north-star-card north-star-waste">
               <span>Combined Monthly Waste</span>
               <strong>{formatCurrency(unifiedSummary.combinedMonthlyWaste)}</strong>
-              <small>Idle licenses, orphaned cloud assets, and over-provisioned instances</small>
+              <small>
+                Idle licenses, plus {formatCurrency(unifiedSummary.platformSavings)} of platform waste: idle warehouses and hosts, orphaned resources, inactive users
+              </small>
             </article>
             <article className="north-star-card optimization-card">
               <span>Optimization Score</span>
@@ -4589,19 +4641,29 @@ export default function App({ user = null, onSignOut = null }) {
               </div>
               <small>Distance from a zero-waste operating model</small>
             </article>
+            <article className="north-star-card">
+              <span>Platform Renewals</span>
+              <strong>{unifiedSummary.noticeIn90}</strong>
+              <small>
+                {unifiedSummary.nextRenewal
+                  ? `Notice deadlines in 90 days. Next: ${unifiedSummary.nextRenewal.platform}, ${unifiedSummary.nextRenewal.name} in ${unifiedSummary.nextRenewal.daysToNotice} days`
+                  : 'Notice deadlines in the next 90 days'}
+              </small>
+            </article>
           </section>
 
+          <div className="unified-trend-row">
           <section className="panel compact-panel trends-panel">
             <div className="panel-header">
               <div>
                 <h2>Cross-Domain Spend Trend</h2>
-                <p>Six-month cost movement across enterprise app licenses and AI tools & agents.</p>
+                <p>Six-month cost movement across end user apps, AI tools & agents (left axis) and enterprise platforms (right axis).</p>
               </div>
             </div>
             <div className="chart-frame unified-trend-frame">
               <ResponsiveContainer width="100%" height={330}>
                 <AreaChart
-                  data={unifiedSpendTrend}
+                  data={spendTrend}
                   margin={{ top: 16, right: 18, left: 0, bottom: 2 }}
                 >
                   <defs>
@@ -4612,6 +4674,10 @@ export default function App({ user = null, onSignOut = null }) {
                     <linearGradient id="aiSpendGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#8e44ad" stopOpacity={0.58} />
                       <stop offset="100%" stopColor="#8e44ad" stopOpacity={0.12} />
+                    </linearGradient>
+                    <linearGradient id="platformSpendGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#f39c12" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#f39c12" stopOpacity={0.04} />
                     </linearGradient>
                     <linearGradient id="cloudSpendGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#27ae60" stopOpacity={0.62} />
@@ -4630,17 +4696,28 @@ export default function App({ user = null, onSignOut = null }) {
                     tick={{ fill: '#7b8ba0', fontSize: 12 }}
                   />
                   <YAxis
+                    yAxisId="apps"
                     tickFormatter={(value) => `$${formatNumber(value)}`}
                     tickLine={false}
                     axisLine={false}
                     tick={{ fill: '#7b8ba0', fontSize: 12 }}
                     width={58}
                   />
+                  <YAxis
+                    yAxisId="platforms"
+                    orientation="right"
+                    tickFormatter={(value) => `$${formatNumber(Math.round(value / 1000))}k`}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: '#b9770e', fontSize: 12 }}
+                    width={52}
+                  />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend content={<ChartLegend />} />
                   <Area
+                    yAxisId="apps"
                     dataKey="desktopSoftware"
-                    name="Enterprise App Licenses"
+                    name="End User Apps"
                     stackId="spend"
                     type="monotone"
                     stroke="#2980b9"
@@ -4648,6 +4725,7 @@ export default function App({ user = null, onSignOut = null }) {
                     fill="url(#desktopSpendGradient)"
                   />
                   <Area
+                    yAxisId="apps"
                     dataKey="aiAgents"
                     name="AI Tools & Agents"
                     stackId="spend"
@@ -4656,17 +4734,49 @@ export default function App({ user = null, onSignOut = null }) {
                     strokeWidth={2.2}
                     fill="url(#aiSpendGradient)"
                   />
+                  {unifiedSummary.platformSpend > 0 && (
+                    <Area
+                      yAxisId="platforms"
+                      dataKey="enterprisePlatforms"
+                      name="Enterprise Infra Platform"
+                      type="monotone"
+                      stroke="#d68910"
+                      strokeWidth={2.2}
+                      strokeDasharray="5 3"
+                      fill="url(#platformSpendGradient)"
+                    />
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </section>
+
+          <section className="panel compact-panel spend-split-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Spend Split</h2>
+                <p>How this month's {formatCurrency(unifiedSummary.totalManagedSpend)} of managed spend divides.</p>
+              </div>
+            </div>
+            <ChartGrid charts={[{ id: 'spend-split', title: 'Total managed spend', type: 'pie', format: 'usd', data: unifiedSummary.spendSplit }]} />
+            <ul className="spend-split-list">
+              {unifiedSummary.spendSplit.map((slice) => (
+                <li key={slice.name}>
+                  <span>{slice.name}</span>
+                  <strong>{formatCurrency(slice.value)}</strong>
+                  <small>{Math.round((slice.value / unifiedSummary.totalManagedSpend) * 100)}%</small>
+                </li>
+              ))}
+            </ul>
+          </section>
+          </div>
 
           <section className="unified-grid unified-grid-single">
             <article className="panel compact-panel">
               <div className="panel-header">
                 <div>
                   <h2>Top 5 Savings Opportunities</h2>
-                  <p>Ranked actions across software, AI tooling, and cloud resources.</p>
+                  <p>Ranked actions across end user apps, AI tooling and enterprise platforms.</p>
                 </div>
               </div>
               <div className="savings-opportunity-list">
@@ -5059,6 +5169,11 @@ export default function App({ user = null, onSignOut = null }) {
         )}
 
         {activeView === 'dashboard' && (
+          <>
+          <LicenseCategoryTabs value={licenseCategory} onChange={setLicenseCategory} />
+          {licenseCategory === 'platform' && <PlatformLicenses />}
+          {licenseCategory === 'ai' && <AiToolLicenses />}
+          {licenseCategory === 'end-user' && (
           <>
           <section className="summary-grid" aria-label="Executive summary">
             <article className="summary-card">
@@ -5510,6 +5625,8 @@ export default function App({ user = null, onSignOut = null }) {
               </article>
             </div>
           </section>
+          </>
+          )}
           </>
         )}
 
