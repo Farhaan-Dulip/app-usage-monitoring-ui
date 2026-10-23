@@ -3625,63 +3625,56 @@ export default function App({ user = null, onSignOut = null }) {
     return unifiedSpendTrend.map((month, index) => ({ ...month, enterprisePlatforms: Math.round(current * shape[index]) }));
   }, [platformStats]);
 
-  const topSavingsOpportunities = useMemo(
-    () =>
-      [
-        {
-          id: 'aws-rds-rightsize',
-          domain: 'Cloud',
-          action: 'Right-size AWS RDS (Production)',
-          impact: 450,
-          detail: 'Move prod-db-instance to the next lower committed tier',
-          tone: 'danger',
-        },
-        {
-          id: 'adobe-harvest',
-          domain: 'Software',
-          action: 'Harvest 12 idle Adobe licenses',
-          impact: 960,
-          detail: 'Recover design seats with less than 1 hour active runtime',
-          tone: 'danger',
-        },
-        {
-          id: 'copilot-downgrade',
-          domain: 'AI Tooling',
-          action: 'Downgrade 5 unused Copilot seats',
-          impact: 100,
-          detail: 'Move inactive users to request-based assignment',
-          tone: 'warning',
-        },
-        {
-          id: 'qa-schedule',
-          domain: 'Cloud',
-          action: 'Schedule QA cloud runners overnight',
-          impact: 186,
-          detail: 'Stop non-production compute outside test windows',
-          tone: 'warning',
-        },
-        {
-          id: 'jetbrains-harvest',
-          domain: 'Software',
-          action: 'Reassign underused JetBrains seats',
-          impact: 145,
-          detail: 'Shift named seats into a pooled developer allocation',
-          tone: 'success',
-        },
-        ...(platformStats?.opportunities || []).map((item) => ({
-          id: item.id,
-          domain: 'Enterprise Platform',
-          action: item.action,
-          impact: Math.round(item.impact),
-          detail: item.detail,
-          tone: 'warning',
-        })),
-      ]
-        .filter((item) => item.domain !== 'Cloud')
-        .sort((firstItem, secondItem) => secondItem.impact - firstItem.impact)
-        .slice(0, 5),
-    [platformStats]
-  );
+  // Top 5 savings per category. End User and AI lists start from the real
+  // reclaimable licences the Trackers found, then sample actions fill the rest;
+  // the platform list comes from the Enterprise Infrastructure Platform data.
+  const topSavingsByCategory = useMemo(() => {
+    const top = (items) => items.filter((item) => item.impact > 0).sort((a, b) => b.impact - a.impact).slice(0, 5);
+    const reclaimedApps = Object.values(
+      usageByApp
+        .filter((entry) => entry.savingsOpportunity > 0)
+        .reduce((groups, entry) => {
+          const name = entry.displayName || entry.appName;
+          const group = groups[name] || { name, impact: 0, pcs: [] };
+          group.impact += entry.savingsOpportunity;
+          group.pcs.push(entry.pcName);
+          return { ...groups, [name]: group };
+        }, {})
+    ).map((group) => ({
+      id: `tracked:${group.name}`,
+      action: `Reclaim ${group.pcs.length} idle ${group.name} license${group.pcs.length === 1 ? '' : 's'}`,
+      detail: `Measured by the Tracker on ${group.pcs.join(', ')}`,
+      impact: Math.round(group.impact),
+    }));
+    const reclaimedAi = usageByExtension
+      .filter((entry) => entry.status === 'Reclaimable' && entry.monthlyCost > 0)
+      .map((entry) => ({
+        id: `tracked-ai:${entry.name}`,
+        action: `Reclaim idle ${entry.name} seats`,
+        detail: 'No assistant activity measured by the Tracker in the review window',
+        impact: Math.round(entry.monthlyCost),
+      }));
+    const endUserSamples = [
+      { id: 'adobe-harvest', action: 'Harvest 12 idle Adobe licenses', impact: 960, detail: 'Recover design seats with less than 1 hour active runtime' },
+      { id: 'figma-downgrade', action: 'Downgrade 4 idle Figma Full seats to View', impact: 180, detail: 'No file activity in 30 days' },
+      { id: 'jetbrains-harvest', action: 'Reassign underused JetBrains seats', impact: 145, detail: 'Shift named seats into a pooled developer allocation' },
+      { id: 'zoom-basic', action: 'Move 6 Zoom users with no sign-in in 30 days to Basic', impact: 80, detail: 'Licensed seats nobody has used this month' },
+      { id: 'docker-remove', action: 'Remove 3 Docker members not seen in 30 days', impact: 72, detail: 'Paid organization seats with no Desktop activity' },
+      { id: 'slack-deactivate', action: 'Deactivate 5 inactive billable Slack members', impact: 44, detail: 'No activity in 14 days' },
+    ];
+    const aiSamples = [
+      { id: 'chatgpt-pool', action: 'Move 4 low-use ChatGPT Enterprise seats to a pooled plan', impact: 240, detail: 'Fewer than 10 messages a month each' },
+      { id: 'claude-budget', action: 'Set Claude Code spend limits for 2 users over budget', impact: 180, detail: 'Month-to-date spend above their budget' },
+      { id: 'cursor-remove', action: 'Remove 3 Cursor seats with no requests in 14 days', impact: 120, detail: 'Idle Business seats' },
+      { id: 'copilot-downgrade', action: 'Downgrade 5 unused Copilot seats', impact: 100, detail: 'Move inactive users to request-based assignment' },
+      { id: 'codex-reclaim', action: 'Reclaim 2 idle Codex seats', impact: 60, detail: 'No Codex turns in 14 days' },
+    ];
+    return {
+      platform: top((platformStats?.opportunities || []).map((item) => ({ id: item.id, action: item.action, detail: item.detail, impact: Math.round(item.impact) }))),
+      endUser: top([...reclaimedApps, ...endUserSamples]),
+      ai: top([...reclaimedAi, ...aiSamples]),
+    };
+  }, [platformStats, usageByApp, usageByExtension]);
 
   const selectedReportTemplate = useMemo(
     () =>
@@ -4771,27 +4764,40 @@ export default function App({ user = null, onSignOut = null }) {
           </section>
           </div>
 
-          <section className="unified-grid unified-grid-single">
-            <article className="panel compact-panel">
-              <div className="panel-header">
-                <div>
-                  <h2>Top 5 Savings Opportunities</h2>
-                  <p>Ranked actions across end user apps, AI tooling and enterprise platforms.</p>
-                </div>
-              </div>
-              <div className="savings-opportunity-list">
-                {topSavingsOpportunities.map((opportunity, index) => (
-                  <div className="savings-opportunity-item" key={opportunity.id}>
-                    <span className="opportunity-rank">{index + 1}</span>
-                    <div>
-                      <strong>{opportunity.action}</strong>
-                      <small>{opportunity.domain} - {opportunity.detail}</small>
-                    </div>
-                    <b>{formatCurrency(opportunity.impact)}/mo</b>
+          <section className="savings-category-grid">
+            {[
+              ['platform', 'Enterprise Infra Platform', 'Idle capacity, orphaned resources and commitments across Azure, Snowflake, Datadog and Atlassian.'],
+              ['endUser', 'End User Apps', 'Idle and underused seats in the apps people use.'],
+              ['ai', 'AI Tools & Agent', 'Idle AI seats, low-use plans and spend over budget.'],
+            ].map(([key, title, description]) => (
+              <article className="panel compact-panel savings-category-panel" key={key}>
+                <div className="panel-header">
+                  <div>
+                    <h2>Top 5 Savings Opportunities - {title}</h2>
+                    <p>{description}</p>
                   </div>
-                ))}
-              </div>
-            </article>
+                  <span className="savings-category-total">
+                    {formatCurrency(topSavingsByCategory[key].reduce((total, item) => total + item.impact, 0))}/mo
+                  </span>
+                </div>
+                {topSavingsByCategory[key].length ? (
+                  <div className="savings-opportunity-list">
+                    {topSavingsByCategory[key].map((opportunity, index) => (
+                      <div className="savings-opportunity-item" key={opportunity.id}>
+                        <span className="opportunity-rank">{index + 1}</span>
+                        <div>
+                          <strong>{opportunity.action}</strong>
+                          <small>{opportunity.detail}</small>
+                        </div>
+                        <b>{formatCurrency(opportunity.impact)}/mo</b>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-value">No savings found yet.</p>
+                )}
+              </article>
+            ))}
 
           </section>
 
