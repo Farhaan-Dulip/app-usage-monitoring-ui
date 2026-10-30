@@ -367,52 +367,6 @@ const engagementVelocity = Array.from({ length: 24 }, (_, hour) => ({
   vsCode: Math.max(6, Math.round(18 + Math.sin((hour - 7) / 2.8) * 20 + (hour >= 8 && hour <= 19 ? 48 : 0))),
 }));
 
-const mockFleetDevices = [
-  {
-    id: 'laptop-dx01',
-    pcName: 'LAPTOP-DX01',
-    user: 'Farhan',
-    isLive: true,
-    activeLicenseCount: null,
-    totalLicenseCost: null,
-    agentVersion: '1.8.3',
-    policy: 'Finance baseline',
-  },
-  {
-    id: 'ws-fin-014',
-    pcName: 'WS-FIN-014',
-    user: 'Nadia',
-    isLive: true,
-    activeLicenseCount: 4,
-    totalLicenseCost: 318,
-    agentVersion: '1.8.1',
-    policy: 'Finance baseline',
-    trackedApps: ['Adobe Creative Cloud', 'Microsoft 365', 'Slack', 'Zoom'],
-  },
-  {
-    id: 'design-mac-07',
-    pcName: 'DESIGN-MAC-07',
-    user: 'Ayesha',
-    isLive: false,
-    activeLicenseCount: 2,
-    totalLicenseCost: 165,
-    agentVersion: '1.7.9',
-    policy: 'Design suite',
-    trackedApps: ['Adobe Creative Cloud', 'Figma'],
-  },
-  {
-    id: 'eng-pc-22',
-    pcName: 'ENG-PC-22',
-    user: 'Ravi',
-    isLive: true,
-    activeLicenseCount: 5,
-    totalLicenseCost: 394,
-    agentVersion: '1.8.3',
-    policy: 'Engineering tools',
-    trackedApps: ['JetBrains', 'PyCharm', 'Microsoft 365', 'Slack', 'Zoom'],
-  },
-];
-
 const cloudProviderColors = {
   AWS: '#ff9900',
   Azure: '#0078d4',
@@ -1966,7 +1920,7 @@ function getTelemetryPcName(payload) {
     payload?.hostname ||
     payload?.device_name ||
     payload?.deviceName ||
-    'LAPTOP-DX01'
+    'Unknown device'
   );
 }
 
@@ -2147,14 +2101,15 @@ function getModelLicenseBreakdown(extension) {
 
 export default function App({ user = null, onSignOut = null }) {
   const portalClientId = useMemo(getPortalClientId, []);
-  const agentStartedAtRef = useRef(null);
+  // agent_started_at per device; a change means that Tracker restarted.
+  const agentStartedAtRef = useRef(new Map());
   // received_at of the newest stored sample; polls request only newer ones.
   const lastTelemetryReceivedAtRef = useRef(null);
   const [hasLoadedPersistentState, setHasLoadedPersistentState] = useState(false);
   const [activeView, setActiveView] = useState('unified-dashboard');
   const [savedConfig, setConfig] = useState(null);
-  const [latestTelemetry, setLatestTelemetry] = useState(null);
-  const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const [newestTelemetry, setLatestTelemetry] = useState(null);
+  const [allTelemetryHistory, setTelemetryHistory] = useState([]);
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [error, setError] = useState('');
   const [emailSummaryStatus, setEmailSummaryStatus] = useState('');
@@ -2197,7 +2152,23 @@ export default function App({ user = null, onSignOut = null }) {
   const [editingInventoryAppId, setEditingInventoryAppId] = useState('');
   const [licenseOnboardingStatus, setLicenseOnboardingStatus] = useState('');
   const [isAppCatalogOpen, setIsAppCatalogOpen] = useState(false);
-  const [selectedDeviceId, setSelectedDeviceId] = useState('laptop-dx01');
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  // Usage views follow one Tracker at a time: the selected device, otherwise
+  // the first live one, so samples from different PCs are never merged.
+  const focusDeviceId = useMemo(() => {
+    const selected = selectedDeviceId.startsWith('device-') ? selectedDeviceId.slice('device-'.length) : '';
+    if (selected && deviceOwners.some((device) => device.deviceId === selected)) return selected;
+    const live = deviceOwners.find(
+      (device) => device.lastSeenAt && Date.now() - new Date(device.lastSeenAt).getTime() < 15 * 60 * 1000
+    );
+    return live?.deviceId || deviceOwners[0]?.deviceId || newestTelemetry?.device_id || '';
+  }, [deviceOwners, newestTelemetry?.device_id, selectedDeviceId]);
+  const liveDeviceKey = focusDeviceId ? `device-${focusDeviceId}` : '';
+  const telemetryHistory = useMemo(
+    () => (focusDeviceId ? allTelemetryHistory.filter((sample) => sample.device_id === focusDeviceId) : allTelemetryHistory),
+    [allTelemetryHistory, focusDeviceId]
+  );
+  const latestTelemetry = telemetryHistory.at(-1) || null;
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [isNavCollapsedAfterSelect, setIsNavCollapsedAfterSelect] = useState(false);
   const [selectedReportTemplateId, setSelectedReportTemplateId] = useState('ceo-monthly');
@@ -3196,8 +3167,8 @@ export default function App({ user = null, onSignOut = null }) {
       0
     ) + onboardedLicenseCost;
 
-    // Devices that report telemetry (device register) come first, with their
-    // owner's work email; the rest of the list is the demo fleet.
+    // Devices that report telemetry (device register), with their owner's
+    // work email. The focused device carries the live usage figures.
     const registeredDevices = deviceOwners.map((device) => ({
       id: `device-${device.deviceId}`,
       pcName: device.pcName,
@@ -3213,14 +3184,14 @@ export default function App({ user = null, onSignOut = null }) {
       registered: true,
     }));
 
-    return [...registeredDevices, ...mockFleetDevices].map((device, index) => ({
+    return registeredDevices.map((device) => ({
       ...device,
       activeLicenseCount:
-        index === 0 ? activeExpensiveLicenses : device.activeLicenseCount,
+        device.id === liveDeviceKey ? activeExpensiveLicenses : device.activeLicenseCount,
       totalLicenseCost:
-        index === 0 ? activeExpensiveLicenseCost : device.totalLicenseCost,
+        device.id === liveDeviceKey ? activeExpensiveLicenseCost : device.totalLicenseCost,
       trackedApps:
-        index === 0
+        device.id === liveDeviceKey
           ? [
               ...usageByApp
                 .filter((entry) => entry.monthlyCost > 0)
@@ -3229,19 +3200,20 @@ export default function App({ user = null, onSignOut = null }) {
             ]
           : device.trackedApps,
     }));
-  }, [deviceOwners, onboardedAppLicenses, usageByApp]);
+  }, [deviceOwners, liveDeviceKey, onboardedAppLicenses, usageByApp]);
 
   const selectedDevice = useMemo(
     () =>
       fleetDevices.find((device) => device.id === selectedDeviceId) ||
+      fleetDevices.find((device) => device.id === liveDeviceKey) ||
       fleetDevices[0],
-    [fleetDevices, selectedDeviceId]
+    [fleetDevices, liveDeviceKey, selectedDeviceId]
   );
 
   const selectedDeviceApps = useMemo(() => {
     if (!selectedDevice) return [];
 
-    if (selectedDevice.id === 'laptop-dx01') {
+    if (selectedDevice.id === liveDeviceKey) {
       const onboardedAppEntries = onboardedAppLicenses.map((app) => ({
         appName: app.appName,
         displayName: app.appName,
@@ -3321,16 +3293,7 @@ export default function App({ user = null, onSignOut = null }) {
       return [];
     }
 
-    if (selectedDevice.id !== 'laptop-dx01') {
-      return engagementVelocity.map((entry) => {
-        const point = { time: entry.time };
-        selectedDeviceEngagementSeries.forEach((series, index) => {
-          const sourceKey = ['adobeCc', 'jetBrains', 'vsCode'][index % 3];
-          point[series.dataKey] = entry[sourceKey] || 0;
-        });
-        return point;
-      });
-    }
+    if (selectedDevice.id !== liveDeviceKey) return [];
 
     const latestTimestampMs =
       getTelemetryTimestampMs(latestTelemetry) || Date.now();
@@ -3434,7 +3397,7 @@ export default function App({ user = null, onSignOut = null }) {
 
   const selectedDeviceLastHeartbeat = useMemo(() => {
     if (!selectedDevice?.isLive) return 'No heartbeat in the last 24h';
-    if (selectedDevice.id === 'laptop-dx01') {
+    if (selectedDevice.id === liveDeviceKey) {
       const lastResetMs = getTelemetryLastResetMs(latestTelemetry);
       const fallbackTelemetryMs = getTelemetryTimestampMs(latestTelemetry);
       const lastSeenMs = lastResetMs || fallbackTelemetryMs;
@@ -4393,7 +4356,7 @@ export default function App({ user = null, onSignOut = null }) {
 
   const handleExploreDashboardAgent = (pcName) => {
     const matchingDevice = fleetDevices.find((device) => device.pcName === pcName);
-    setSelectedDeviceId(matchingDevice?.id || 'laptop-dx01');
+    setSelectedDeviceId(matchingDevice?.id || liveDeviceKey);
     setActiveView('agent-management');
     setShowAgentDetails(true);
   };
@@ -4402,16 +4365,11 @@ export default function App({ user = null, onSignOut = null }) {
     const nextAgentStartedAt = getAgentStartedTimestampMs(payload);
     if (!nextAgentStartedAt) return false;
 
-    const previousAgentStartedAt = agentStartedAtRef.current;
-    agentStartedAtRef.current = nextAgentStartedAt;
+    const deviceKey = payload.device_id || payload.device_name || '';
+    const previousAgentStartedAt = agentStartedAtRef.current.get(deviceKey);
+    agentStartedAtRef.current.set(deviceKey, nextAgentStartedAt);
 
-    if (!previousAgentStartedAt || previousAgentStartedAt === nextAgentStartedAt) {
-      return false;
-    }
-
-    setTelemetryHistory([]);
-    setLatestTelemetry(null);
-    return true;
+    return Boolean(previousAgentStartedAt) && previousAgentStartedAt !== nextAgentStartedAt;
   };
 
   const loadTelemetry = () => {
@@ -4435,9 +4393,12 @@ export default function App({ user = null, onSignOut = null }) {
         const agentRestarted = latest ? resetForAgentStartChange(latest) : false;
         setLatestTelemetry((current) => latest || current);
         setTelemetryHistory((current) => {
-          if (agentRestarted) return latest ? [latest] : [];
-          if (!since) return incoming;
           const sampleKey = (sample) => `${sample.device_id || sample.device_name}|${sample.timestamp}`;
+          if (agentRestarted) {
+            const restartedDevice = latest.device_id || latest.device_name;
+            return [...current.filter((sample) => (sample.device_id || sample.device_name) !== restartedDevice), latest];
+          }
+          if (!since) return incoming;
           const known = new Set(current.map(sampleKey));
           return [...current, ...incoming.filter((sample) => !known.has(sampleKey(sample)))];
         });
@@ -4470,9 +4431,9 @@ export default function App({ user = null, onSignOut = null }) {
     return () => clearInterval(timer);
   }, [activeView]);
 
-  // Device owners panel (Tracker Management).
+  // Device register: on start (the focused device) and on Tracker Management.
   useEffect(() => {
-    if (activeView !== 'agent-management') return;
+    if (deviceOwners.length > 0 && activeView !== 'agent-management') return;
     fetch(`${BACKEND_BASE_URL}/api/devices`)
       .then((response) => {
         if (!response.ok) throw new Error(`Device load failed with status ${response.status}`);
@@ -6706,9 +6667,9 @@ export default function App({ user = null, onSignOut = null }) {
                   <span>Tracking Load</span>
                   <strong>{selectedDeviceApps.length}</strong>
                   <small>
-                    {selectedDevice.id === 'laptop-dx01'
+                    {selectedDevice.id === liveDeviceKey
                       ? `${telemetryHistory.length} telemetry samples stored`
-                      : 'Mock deployment profile'}
+                      : 'No telemetry yet'}
                   </small>
                 </article>
               </div>
@@ -6842,7 +6803,7 @@ export default function App({ user = null, onSignOut = null }) {
                 </div>
               </div>
 
-              {selectedDevice.id === 'laptop-dx01' && usageByExtension.length > 0 && (
+              {selectedDevice.id === liveDeviceKey && usageByExtension.length > 0 && (
                 <div className="detail-extension-section">
                   <h3>AI Licenses</h3>
                   <div className="tracked-app-list">
