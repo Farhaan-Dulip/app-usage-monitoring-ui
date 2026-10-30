@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatAssistant from './ChatAssistant';
 import AppNavigation from './components/AppNavigation';
 import AiToolsView, { UserAiTools } from './components/AiToolsView';
@@ -1924,6 +1924,186 @@ function getTelemetryPcName(payload) {
   );
 }
 
+// License Utilizations groups usage by what is paid for: one row per license
+// on each PC, with the surfaces it is used through (desktop app, extensions in
+// other apps, web) underneath. A host app such as VS Code keeps its own row
+// and lists the extensions that run in it, so no runtime or cost is repeated.
+const STATUS_RANK = { Active: 0, Evaluating: 1, Reclaimable: 2, 'Not installed': 3 };
+
+// Web addresses of common licenses, keyed by licenseKey(subscription name).
+const KNOWN_WEB_APPS = {
+  claude: 'https://claude.ai',
+  chatgpt: 'https://chatgpt.com',
+  openai: 'https://chatgpt.com',
+  codex: 'https://chatgpt.com/codex',
+  githubcopilot: 'https://github.com/copilot',
+  copilot: 'https://copilot.microsoft.com',
+  figma: 'https://www.figma.com',
+  slack: 'https://app.slack.com',
+  zoom: 'https://app.zoom.us',
+  postman: 'https://web.postman.co',
+  vscode: 'https://vscode.dev',
+  visualstudiocode: 'https://vscode.dev',
+  notion: 'https://www.notion.so',
+  miro: 'https://miro.com',
+  canva: 'https://www.canva.com',
+  jira: 'https://www.atlassian.com/software/jira',
+  confluence: 'https://www.atlassian.com/software/confluence',
+  microsoftteams: 'https://teams.microsoft.com',
+  teams: 'https://teams.microsoft.com',
+  microsoft365: 'https://www.office.com',
+  adobecreativecloud: 'https://creativecloud.adobe.com',
+};
+
+function webAddressHost(value) {
+  try {
+    return new URL(String(value || '')).host.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function licenseKey(value) {
+  return String(value || '').toLowerCase().replace(/\.exe$/, '').replace(/[^a-z0-9]/g, '');
+}
+
+function trackedSurfaceCount(group) {
+  return group.surfaces.filter((surface) => !surface.notTracked).length;
+}
+
+function groupStatus(surfaces) {
+  const ranked = [...surfaces].sort(
+    (first, second) => (STATUS_RANK[first.status] ?? 9) - (STATUS_RANK[second.status] ?? 9)
+  );
+  const best = ranked[0];
+  if (!best) return { status: 'Evaluating', reason: 'No usage reported yet' };
+  // Not installed only when no surface is installed; otherwise the best surface decides.
+  const installed = ranked.find((surface) => surface.status !== 'Not installed');
+  const decider = installed || best;
+  return { status: decider.status, reason: decider.reclaimReason || '' };
+}
+
+function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
+  const subscriptionFor = (pcName, appName) => {
+    const record = deploymentPolicyRecords.find(
+      (item) =>
+        !item.parent_app &&
+        String(item.target_pc || '').toLowerCase() === String(pcName || '').toLowerCase() &&
+        String(item.app_name || '').toLowerCase() === String(appName || '').toLowerCase()
+    );
+    return record?.subscriptionType || '';
+  };
+  const groups = [];
+
+  deviceUsages.forEach((usage) => {
+    const pcName = usage.currentPcName;
+    const pcGroups = new Map();
+    const addSurface = (key, name, icon, surface) => {
+      if (!pcGroups.has(key)) {
+        pcGroups.set(key, { id: `${pcName}|${key}`, pcName, name, icon, surfaces: [], hostsExtensions: [] });
+      }
+      pcGroups.get(key).surfaces.push(surface);
+      return pcGroups.get(key);
+    };
+    const findGroup = (candidates) => {
+      for (const candidate of candidates.map(licenseKey).filter(Boolean)) {
+        if (pcGroups.has(candidate)) return candidate;
+        const match = [...pcGroups.keys()].find((key) => candidate.startsWith(key));
+        if (match) return match;
+      }
+      return null;
+    };
+
+    usage.usageByApp.forEach((entry) => {
+      const name = subscriptionFor(pcName, entry.appName) || entry.displayName;
+      addSurface(licenseKey(name), name, entry.icon, {
+        ...entry,
+        surface: 'Desktop app',
+        detail: entry.rawName || entry.appName,
+      });
+    });
+
+    usage.usageByExtension.forEach((extension) => {
+      const candidates = [...(extension.subscriptionTypes || []), extension.name];
+      const key = findGroup(candidates) || licenseKey(candidates[0]);
+      const hosts = extension.parentApps.map((parent) => getReadableAppIdentity(parent).displayName);
+      addSurface(key, candidates[0], extension.icon, {
+        ...extension,
+        surface: hosts.length > 0 ? `Extension in ${hosts.join(', ')}` : 'Extension',
+        detail: extension.name,
+      });
+    });
+
+    // A tracked URL belongs to the license its address names (claude.ai -> Claude)
+    // or whose known web address it is.
+    usage.usageByUrl.forEach((url) => {
+      const address = licenseKey(url.url);
+      const host = webAddressHost(url.url);
+      const key = [...pcGroups.keys()].find(
+        (candidate) =>
+          candidate &&
+          (address.includes(candidate) || (host && webAddressHost(KNOWN_WEB_APPS[candidate]) === host))
+      );
+      if (!key) return;
+      pcGroups.get(key).surfaces.push({
+        ...url,
+        surface: 'Web app',
+        detail: url.url,
+        status: '',
+        monthlyCost: 0,
+        totalRuntimeSeconds: url.trackedRuntimeSeconds,
+      });
+    });
+
+    // Every license shows its web line; one the Trackers do not watch yet says so.
+    pcGroups.forEach((group, key) => {
+      if (group.surfaces.some((surface) => surface.surface === 'Web app')) return;
+      group.surfaces.push({
+        surface: 'Web app',
+        detail: KNOWN_WEB_APPS[key] || 'No web address set',
+        status: '',
+        notTracked: true,
+        monthlyCost: 0,
+        totalRuntimeSeconds: 0,
+        workedRuntimeSeconds: 0,
+        automationWorkedSeconds: 0,
+        idleRuntimeSeconds: 0,
+      });
+    });
+
+    pcGroups.forEach((group) => {
+      const hostApps = group.surfaces
+        .filter((surface) => surface.surface === 'Desktop app')
+        .map((surface) => String(surface.appName).toLowerCase());
+      group.hostsExtensions = usage.usageByExtension
+        .filter((extension) => extension.parentApps.some((parent) => hostApps.includes(String(parent).toLowerCase())))
+        .map((extension) => {
+          const candidates = [...(extension.subscriptionTypes || []), extension.name];
+          return { name: candidates[0], groupId: `${pcName}|${findGroup(candidates) || licenseKey(candidates[0])}` };
+        })
+        .filter((host) => host.groupId !== group.id);
+      const decided = group.surfaces.filter((surface) => surface.status);
+      const { status, reason } = groupStatus(decided);
+      const sum = (field) => group.surfaces.reduce((total, surface) => total + (Number(surface[field]) || 0), 0);
+      // Surfaces of one license share its cost; take it once.
+      const monthlyCost = Math.max(0, ...group.surfaces.map((surface) => Number(surface.monthlyCost) || 0));
+      groups.push({
+        ...group,
+        status,
+        reclaimReason: reason,
+        monthlyCost,
+        savingsOpportunity: status === 'Reclaimable' ? monthlyCost : 0,
+        totalRuntimeSeconds: sum('totalRuntimeSeconds'),
+        workedRuntimeSeconds: sum('workedRuntimeSeconds'),
+        automationWorkedSeconds: sum('automationWorkedSeconds'),
+        idleRuntimeSeconds: sum('idleRuntimeSeconds'),
+        hasAgentExtension: group.surfaces.some((surface) => surface.type === 'agent' || surface.hasAgentExtension),
+      });
+    });
+  });
+  return groups;
+}
+
 const DEVICE_LIVE_MS = 15 * 60 * 1000;
 
 // Older Trackers send no installed_apps; RabbitMQ events nest the sample in `usage`.
@@ -2253,6 +2433,122 @@ function computeDeviceUsage({
     });
   })();
 
+  const usageByUrl = (() => {
+    if (!config?.tracked_urls) return [];
+
+    return config.tracked_urls.map((url) => ({
+      url,
+      ...getUsageCounters(accumulatedUsage, `url:${url}`),
+    }));
+  })();
+
+  const usageByExtension = (() => {
+    if (!config?.extensions) return [];
+
+    return getUniqueExtensionRules(config.extensions).map((extension, index) => {
+      const usageCounters = getUsageCounters(accumulatedUsage, extension.name);
+      const isAgentExtension = extension.type === 'agent';
+      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
+      const totalRuntimeSeconds = isAgentExtension
+        ? automationWorkedSeconds
+        : usageCounters.trackedRuntimeSeconds;
+      const workedRuntimeSeconds = isAgentExtension
+        ? automationWorkedSeconds
+        : usageCounters.workedRuntimeSeconds;
+      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
+      const unitMonthlyCost = getExtensionMonthlyCost(extension, index);
+      const lastSeenAt = getLastSeenAt(
+        config,
+        telemetryHistory,
+        extension.name,
+        extension.lastSeenAt
+      );
+      const reclaimPolicy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        extension.name,
+        extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY,
+        { type: extension.type, parentApp: extension.parentApps }
+      );
+      const policyUsageCounters = {
+        ...usageCounters,
+        workedRuntimeSeconds,
+      };
+      const modelUsage = getModelUsageForExtension(accumulatedUsage, extension.name);
+      const activeModelNames = modelUsage
+        .filter((model) => model.workedRuntimeSeconds > 0)
+        .map((model) => model.name);
+      const selectedAiModel =
+        usageCounters.selectedAiModel ||
+        modelUsage.find((model) => model.name)?.name ||
+        null;
+      const consumedTokens =
+        usageCounters.consumedTokens ||
+        modelUsage.reduce((sum, model) => sum + model.consumedTokens, 0);
+      const tokenSource =
+        usageCounters.tokenSource ||
+        modelUsage.find((model) => model.tokenSource)?.tokenSource ||
+        null;
+      const reclaimDecision = getReclaimDecision({
+        policy: reclaimPolicy,
+        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
+        consumedTokens,
+        previousDecision:
+          completedEvaluationDecisions[
+            getEvaluationDecisionKey(
+              currentPcName,
+              extension.type,
+              extension.name,
+              evaluationSeriesStartsAt
+            )
+          ],
+      });
+      const detectedPcNames = getDetectedPcNamesForUsage(
+        telemetryHistory,
+        extension.name
+      );
+      const detectedSeatCount =
+        detectedPcNames.length > 0 || totalRuntimeSeconds === 0
+          ? detectedPcNames.length
+          : 1;
+      const configuredSeatCount = Math.max(1, extension.parentApps.length);
+      const modelLicenseBreakdown = getModelLicenseBreakdown({
+        ...extension,
+        modelUsage,
+        aiModels: extension.aiModels,
+      });
+
+      return {
+        ...extension,
+        icon: getAppIcon(extension.name),
+        unitMonthlyCost,
+        monthlyCost: unitMonthlyCost * configuredSeatCount,
+        detectedPcNames,
+        detectedSeatCount,
+        configuredSeatCount,
+        activeModelNames,
+        modelUsage,
+        modelLicenseBreakdown,
+        status: reclaimDecision.status,
+        reclaimReason: reclaimDecision.reason,
+        reclaimPolicy,
+        firstSeenAt: extension.firstSeenAt,
+        lastSeenAt,
+        selectedAiModel,
+        consumedTokens,
+        tokenSource,
+        totalRuntimeSeconds,
+        workedRuntimeSeconds,
+        automationWorkedSeconds,
+        idleRuntimeSeconds,
+        utilizationPercent: getPolicyUtilizationPercent(
+          workedRuntimeSeconds,
+          reclaimPolicy
+        ),
+      };
+    });
+  })();
+
   return {
     latestTelemetry,
     currentPcName,
@@ -2265,6 +2561,8 @@ function computeDeviceUsage({
     evaluationWindow,
     accumulatedUsage,
     usageByApp,
+    usageByUrl,
+    usageByExtension,
     newDecisions,
   };
 }
@@ -2733,6 +3031,7 @@ export default function App({ user = null, onSignOut = null }) {
     evaluationWindow,
     accumulatedUsage,
     usageByApp,
+    usageByExtension,
   } = focusUsage;
   // Every registered device, online or not: License Utilizations rows and
   // window decisions.
@@ -2752,6 +3051,27 @@ export default function App({ user = null, onSignOut = null }) {
     () => allDeviceUsages.flatMap((usage) => usage.usageByApp),
     [allDeviceUsages]
   );
+  const licenseGroups = useMemo(
+    () => buildLicenseGroups(allDeviceUsages, deploymentPolicyRecords),
+    [allDeviceUsages, deploymentPolicyRecords]
+  );
+  const [collapsedLicenseGroups, setCollapsedLicenseGroups] = useState(() => new Set());
+  const toggleLicenseGroup = (groupId) =>
+    setCollapsedLicenseGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  const licenseSummary = useMemo(
+    () => ({
+      monthlyCost: licenseGroups.reduce((sum, group) => sum + group.monthlyCost, 0),
+      savings: licenseGroups.reduce((sum, group) => sum + group.savingsOpportunity, 0),
+      total: licenseGroups.length,
+      active: licenseGroups.filter((group) => group.status === 'Active').length,
+    }),
+    [licenseGroups]
+  );
 
   // Persist decisions for windows that closed on any registered device.
   useEffect(() => {
@@ -2761,132 +3081,6 @@ export default function App({ user = null, onSignOut = null }) {
   }, [allDeviceUsages]);
 
 
-  const usageByUrl = useMemo(() => {
-    if (!config?.tracked_urls) return [];
-
-    return config.tracked_urls.map((url) => ({
-      url,
-      ...getUsageCounters(accumulatedUsage, `url:${url}`),
-    }));
-  }, [config, accumulatedUsage]);
-
-  const usageByExtension = useMemo(() => {
-    if (!config?.extensions) return [];
-
-    return getUniqueExtensionRules(config.extensions).map((extension, index) => {
-      const usageCounters = getUsageCounters(accumulatedUsage, extension.name);
-      const isAgentExtension = extension.type === 'agent';
-      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
-      const totalRuntimeSeconds = isAgentExtension
-        ? automationWorkedSeconds
-        : usageCounters.trackedRuntimeSeconds;
-      const workedRuntimeSeconds = isAgentExtension
-        ? automationWorkedSeconds
-        : usageCounters.workedRuntimeSeconds;
-      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
-      const unitMonthlyCost = getExtensionMonthlyCost(extension, index);
-      const lastSeenAt = getLastSeenAt(
-        config,
-        telemetryHistory,
-        extension.name,
-        extension.lastSeenAt
-      );
-      const reclaimPolicy = getStoredReclaimPolicy(
-        deploymentPolicyRecords,
-        currentPcName,
-        extension.name,
-        extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY,
-        { type: extension.type, parentApp: extension.parentApps }
-      );
-      const policyUsageCounters = {
-        ...usageCounters,
-        workedRuntimeSeconds,
-      };
-      const modelUsage = getModelUsageForExtension(accumulatedUsage, extension.name);
-      const activeModelNames = modelUsage
-        .filter((model) => model.workedRuntimeSeconds > 0)
-        .map((model) => model.name);
-      const selectedAiModel =
-        usageCounters.selectedAiModel ||
-        modelUsage.find((model) => model.name)?.name ||
-        null;
-      const consumedTokens =
-        usageCounters.consumedTokens ||
-        modelUsage.reduce((sum, model) => sum + model.consumedTokens, 0);
-      const tokenSource =
-        usageCounters.tokenSource ||
-        modelUsage.find((model) => model.tokenSource)?.tokenSource ||
-        null;
-      const reclaimDecision = getReclaimDecision({
-        policy: reclaimPolicy,
-        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
-        consumedTokens,
-        previousDecision:
-          completedEvaluationDecisions[
-            getEvaluationDecisionKey(
-              currentPcName,
-              extension.type,
-              extension.name,
-              evaluationSeriesStartsAt
-            )
-          ],
-      });
-      const detectedPcNames = getDetectedPcNamesForUsage(
-        telemetryHistory,
-        extension.name
-      );
-      const detectedSeatCount =
-        detectedPcNames.length > 0 || totalRuntimeSeconds === 0
-          ? detectedPcNames.length
-          : 1;
-      const configuredSeatCount = Math.max(1, extension.parentApps.length);
-      const modelLicenseBreakdown = getModelLicenseBreakdown({
-        ...extension,
-        modelUsage,
-        aiModels: extension.aiModels,
-      });
-
-      return {
-        ...extension,
-        icon: getAppIcon(extension.name),
-        unitMonthlyCost,
-        monthlyCost: unitMonthlyCost * configuredSeatCount,
-        detectedPcNames,
-        detectedSeatCount,
-        configuredSeatCount,
-        activeModelNames,
-        modelUsage,
-        modelLicenseBreakdown,
-        status: reclaimDecision.status,
-        reclaimReason: reclaimDecision.reason,
-        reclaimPolicy,
-        firstSeenAt: extension.firstSeenAt,
-        lastSeenAt,
-        selectedAiModel,
-        consumedTokens,
-        tokenSource,
-        totalRuntimeSeconds,
-        workedRuntimeSeconds,
-        automationWorkedSeconds,
-        idleRuntimeSeconds,
-        utilizationPercent: getPolicyUtilizationPercent(
-          workedRuntimeSeconds,
-          reclaimPolicy
-        ),
-      };
-    });
-  }, [
-    config,
-    accumulatedUsage,
-    completedEvaluationDecisions,
-    currentPcName,
-    currentTimeMs,
-    deploymentPolicyRecords,
-    evaluationSeriesStartsAt,
-    evaluationWindow.isAgentReported,
-    telemetryHistory,
-    telemetryWindow.endsAt,
-  ]);
 
   const discoveredApplications = useMemo(() => {
     if (!config) return [];
@@ -3142,6 +3336,19 @@ export default function App({ user = null, onSignOut = null }) {
       }),
     [usageByExtension]
   );
+
+  const sortedLicenseGroups = useMemo(() => {
+    const key = sortConfig.key === 'appName' ? 'name' : sortConfig.key;
+    const direction = sortConfig.direction === 'asc' ? 1 : -1;
+    return [...licenseGroups].sort((first, second) => {
+      const firstValue = first[key] ?? '';
+      const secondValue = second[key] ?? '';
+      if (typeof firstValue === 'number' && typeof secondValue === 'number') {
+        return (firstValue - secondValue) * direction;
+      }
+      return String(firstValue).localeCompare(String(secondValue)) * direction;
+    });
+  }, [licenseGroups, sortConfig]);
 
   const sortedUsageByApp = useMemo(() => {
     const sortableRows = [...allDevicesUsageByApp];
@@ -5251,11 +5458,11 @@ export default function App({ user = null, onSignOut = null }) {
           <section className="panel">
             <div className="panel-header">
               <div>
-                <h2>App Licenses</h2>
+                <h2>Licenses</h2>
                 <p>
-                  License decisions are finalized at the end of each evaluation
-                  window. The completed status remains in place until the next
-                  evaluation finishes.
+                  One row per license on each PC, with the desktop app, extensions and
+                  web use it is tracked through. License decisions are finalized at the
+                  end of each evaluation window.
                 </p>
                 <div className="tracking-window-meta">
                   <span>
@@ -5274,24 +5481,24 @@ export default function App({ user = null, onSignOut = null }) {
               </div>
             </div>
 
-            <div className="extension-summary-grid" aria-label="App license summary">
+            <div className="extension-summary-grid" aria-label="License summary">
               <div>
                 <span>Overall monthly cost</span>
-                <strong>{formatCurrency(aggregates.trackedMonthlyCost)}</strong>
+                <strong>{formatCurrency(licenseSummary.monthlyCost)}</strong>
               </div>
               <div>
                 <span>Identified Monthly Savings</span>
-                <strong>{formatCurrency(aggregates.totalSavings)}</strong>
+                <strong>{formatCurrency(licenseSummary.savings)}</strong>
               </div>
               <div>
-                <span>App Licenses</span>
-                <strong>{aggregates.totalSeats}</strong>
-                <small>{aggregates.activeSeats} Actively Working</small>
+                <span>Licenses</span>
+                <strong>{licenseSummary.total}</strong>
+                <small>{licenseSummary.active} Actively Working</small>
               </div>
             </div>
 
             <div className="table-wrap">
-              <table>
+              <table className="license-group-table">
                 <thead>
                   <tr>
                     <th>
@@ -5301,7 +5508,7 @@ export default function App({ user = null, onSignOut = null }) {
                     </th>
                     <th>
                       <button type="button" onClick={() => requestSort('appName')}>
-                        App Identity{renderSortIndicator('appName')}
+                        License{renderSortIndicator('appName')}
                       </button>
                     </th>
                     <th>
@@ -5310,27 +5517,17 @@ export default function App({ user = null, onSignOut = null }) {
                       </button>
                     </th>
                     <th>
-                      <button
-                        type="button"
-                        onClick={() => requestSort('totalRuntimeSeconds')}
-                      >
+                      <button type="button" onClick={() => requestSort('totalRuntimeSeconds')}>
                         Tracked Runtime{renderSortIndicator('totalRuntimeSeconds')}
                       </button>
                     </th>
-                    <th>Utilization</th>
                     <th>
-                      <button
-                        type="button"
-                        onClick={() => requestSort('monthlyCost')}
-                      >
+                      <button type="button" onClick={() => requestSort('monthlyCost')}>
                         Cost Impact{renderSortIndicator('monthlyCost')}
                       </button>
                     </th>
                     <th>
-                      <button
-                        type="button"
-                        onClick={() => requestSort('savingsOpportunity')}
-                      >
+                      <button type="button" onClick={() => requestSort('savingsOpportunity')}>
                         Savings Opportunity{renderSortIndicator('savingsOpportunity')}
                       </button>
                     </th>
@@ -5338,172 +5535,106 @@ export default function App({ user = null, onSignOut = null }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedUsageByApp.map((entry) => (
-                    <tr key={`${entry.pcName}|${entry.appName}`}>
-                      <td>
-                        <span className="pc-name-chip">{entry.pcName}</span>
-                      </td>
-                      <td>
-                        <div className="app-identity">
-                          <span className="app-icon">{entry.icon}</span>
-                          <span className="app-name-stack">
-                            <strong>{entry.displayName}</strong>
-                            {entry.shouldShowRawName && <small>{entry.rawName}</small>}
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <span
-                          className={`status-badge ${getStatusBadgeClass(entry.status)}`}
-                          title={entry.reclaimReason}
-                        >
-                          {entry.status}
-                        </span>
-                      </td>
-                      <td><RuntimeBreakdown entry={entry} /></td>
-                      <td>{entry.utilizationPercent}%</td>
-                      <td className="cost-impact-value">
-                        -{formatCurrency(entry.monthlyCost)}
-                      </td>
-                      <td
-                        className={
-                          entry.savingsOpportunity > 0
-                            ? 'savings-value'
-                            : 'muted-value'
-                        }
-                      >
-                        {entry.savingsOpportunity > 0
-                          ? `+${formatCurrency(entry.savingsOpportunity)}`
-                          : formatCurrency(0)}
-                      </td>
-                      <td>
-                        <button
-                          className="explore-button"
-                          type="button"
-                          onClick={() => handleExploreDashboardAgent(entry.pcName)}
-                        >
-                          <span className="action-symbol">›</span>
-                          Explore
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {sortedUsageByApp.length === 0 && (
+                  {sortedLicenseGroups.map((group) => {
+                    const isCollapsed = collapsedLicenseGroups.has(group.id);
+                    return (
+                      <Fragment key={group.id}>
+                        <tr className="license-group-row">
+                          <td>
+                            <span className="pc-name-chip">{group.pcName}</span>
+                          </td>
+                          <td>
+                            <div className="app-identity">
+                              <button
+                                className="license-toggle"
+                                type="button"
+                                aria-expanded={!isCollapsed}
+                                aria-label={`${isCollapsed ? 'Show' : 'Hide'} ${group.name} usage`}
+                                onClick={() => toggleLicenseGroup(group.id)}
+                              >
+                                {isCollapsed ? '▸' : '▾'}
+                              </button>
+                              <span className="app-icon">{group.icon}</span>
+                              <span className="app-name-stack">
+                                <strong>{group.name}</strong>
+                                <small>
+                                  {trackedSurfaceCount(group)} tracked{' '}
+                                  {trackedSurfaceCount(group) === 1 ? 'surface' : 'surfaces'}
+                                </small>
+                                {group.hostsExtensions.length > 0 && (
+                                  <small className="license-hosts">
+                                    Runs extensions:{' '}
+                                    {group.hostsExtensions.map((host) => host.name).join(', ')}
+                                  </small>
+                                )}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              className={`status-badge ${getStatusBadgeClass(group.status)}`}
+                              title={group.reclaimReason}
+                            >
+                              {group.status}
+                            </span>
+                          </td>
+                          <td><RuntimeBreakdown entry={group} /></td>
+                          <td className="cost-impact-value">-{formatCurrency(group.monthlyCost)}</td>
+                          <td className={group.savingsOpportunity > 0 ? 'savings-value' : 'muted-value'}>
+                            {group.savingsOpportunity > 0
+                              ? `+${formatCurrency(group.savingsOpportunity)}`
+                              : formatCurrency(0)}
+                          </td>
+                          <td>
+                            <button
+                              className="explore-button"
+                              type="button"
+                              onClick={() => handleExploreDashboardAgent(group.pcName)}
+                            >
+                              <span className="action-symbol">›</span>
+                              Explore
+                            </button>
+                          </td>
+                        </tr>
+                        {!isCollapsed &&
+                          group.surfaces.map((surface) => (
+                            <tr
+                              className="license-surface-row"
+                              key={`${group.id}|${surface.surface}|${surface.detail}`}
+                            >
+                              <td />
+                              <td>
+                                <span className="app-name-stack license-surface-name">
+                                  <strong>{surface.surface}</strong>
+                                  <small>{surface.detail}</small>
+                                </span>
+                              </td>
+                              <td>
+                                {surface.notTracked ? (
+                                  <span className="muted-value">Not tracked</span>
+                                ) : surface.status === 'Not installed' ? (
+                                  <span className={`status-badge ${getStatusBadgeClass(surface.status)}`}>
+                                    {surface.status}
+                                  </span>
+                                ) : (
+                                  <span className="muted-value">
+                                    {surface.lastSeenAt ? `Last used ${formatDateTime(surface.lastSeenAt)}` : ''}
+                                  </span>
+                                )}
+                              </td>
+                              <td><RuntimeBreakdown entry={surface} /></td>
+                              <td />
+                              <td />
+                              <td />
+                            </tr>
+                          ))}
+                      </Fragment>
+                    );
+                  })}
+                  {sortedLicenseGroups.length === 0 && (
                     <tr>
-                      <td colSpan="8" className="empty-state">
+                      <td colSpan="7" className="empty-state">
                         Waiting for licensed app configuration.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel compact-panel">
-            <div className="panel-header">
-              <div>
-                <h2>AI Licenses</h2>
-                <p>Nested extension usage is counted only while the host application is focused.</p>
-              </div>
-            </div>
-
-            <div className="extension-summary-grid" aria-label="AI extension summary">
-              <div>
-                <span>Overall monthly cost</span>
-                <strong>{formatCurrency(aggregates.totalExtensionMonthlyCost)}</strong>
-              </div>
-              <div>
-                <span>Identified Monthly Savings</span>
-                <strong>{formatCurrency(aggregates.totalExtensionSavings)}</strong>
-              </div>
-              <div>
-                <span>AI Agent Licenses</span>
-                <strong>{aggregates.totalAgentExtensions}</strong>
-                <small>{aggregates.activeExtensions} Actively Working</small>
-              </div>
-            </div>
-
-            <div className="table-wrap attribution-table-wrap">
-              <table className="attribution-table extension-attribution-table">
-                <thead>
-                  <tr>
-                    <th>PC Name</th>
-                    <th>Extension Identity</th>
-                    <th>Status</th>
-                    <th>Tracked Runtime</th>
-                    <th>Utilization</th>
-                    <th>Cost Impact</th>
-                    <th>Savings Opportunity</th>
-                    <th>Explore</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {extensionAttributionRows.map((extension) => (
-                    <tr key={extension.rowId}>
-                      <td>
-                        <span className="pc-list">
-                          {extension.detectedPcNames.length > 0
-                            ? extension.detectedPcNames.join(', ')
-                            : currentPcName}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="app-identity">
-                          <span className="app-icon extension-icon">
-                            {extension.icon}
-                          </span>
-                          <span className="app-name-stack">
-                            <strong>{extension.name}</strong>
-                            <small>{extension.subscriptionType}</small>
-                            <small>{extension.parentApps.join(', ')}</small>
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <span
-                          className={`status-badge ${getStatusBadgeClass(extension.status)}`}
-                          title={extension.reclaimReason}
-                        >
-                          {extension.status}
-                        </span>
-                      </td>
-                      <td><RuntimeBreakdown entry={extension} /></td>
-                      <td>{extension.utilizationPercent}%</td>
-                      <td className="cost-impact-value">
-                        -{formatCurrency(extension.monthlyCost)}
-                      </td>
-                      <td
-                        className={
-                          extension.status === 'Reclaimable'
-                            ? 'savings-value'
-                            : 'muted-value'
-                        }
-                      >
-                        {extension.status === 'Reclaimable'
-                          ? `+${formatCurrency(extension.monthlyCost)}`
-                          : formatCurrency(0)}
-                      </td>
-                      <td>
-                        <button
-                          className="explore-button"
-                          type="button"
-                          onClick={() =>
-                            handleExploreDashboardAgent(
-                              extension.detectedPcNames[0] || currentPcName
-                            )
-                          }
-                        >
-                          <span className="action-symbol">â€º</span>
-                          Explore
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {extensionAttributionRows.length === 0 && (
-                    <tr>
-                      <td colSpan="8" className="empty-state">
-                        Waiting for extension attribution rules from the tracker.
                       </td>
                     </tr>
                   )}

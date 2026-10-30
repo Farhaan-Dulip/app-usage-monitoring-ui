@@ -5552,3 +5552,48 @@ label.platform-contract-check {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* License Utilizations: one row per license, its surfaces underneath. */
+.license-toggle {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 24px;
+  cursor: pointer;
+  flex: none;
+}
+
+.license-toggle:hover {
+  background: #eef2f7;
+  color: #0f172a;
+}
+
+.license-hosts {
+  color: #1a7fc4;
+}
+
+.license-group-table .license-surface-row td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-top: 0;
+  background: #f8fafc;
+  font-size: 13px;
+}
+
+.license-surface-name {
+  padding-left: 64px;
+}
+
+.license-surface-name strong {
+  font-weight: 600;
+  color: #334155;
+}
+
+.license-group-table .license-surface-row .runtime-breakdown strong {
+  font-size: 13px;
+}
