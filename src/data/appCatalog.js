@@ -10,6 +10,9 @@
 // product: entries that are one license used through different surfaces
 // (desktop app, extension in another app, web). Onboarding one offers the
 // rest, and License Utilizations shows every surface under that license.
+// autoDetected: the Tracker finds this surface by itself once the product's
+// desktop app is licensed (its program running inside another app, or its web
+// pages in the focused browser tab), so onboarding does not offer it.
 // connector: the vendor whose admin API the Connect dialog signs in to (or, for
 // vscode / visual-studio, explains that there is none).
 
@@ -41,7 +44,7 @@ export const APP_CATALOG = [
 
   // Extensions (detected inside the parent app's process tree)
   { id: 'github-copilot', product: 'copilot', connector: 'copilot', appType: 'Extension', appName: 'GitHub Copilot', processName: 'github-copilot', parentApp: 'Visual Studio Code', subscriptionType: 'Copilot Enterprise', publisher: 'GitHub', category: 'AI assistant', verified: false, note: 'Built-in detection rule for the Copilot extension host in VS Code.' },
-  { id: 'claude-code-vscode', product: 'claude', connector: 'claude', appType: 'Extension', appName: 'Claude Code', processName: 'claude-code', parentApp: 'Visual Studio Code', subscriptionType: 'Claude', publisher: 'Anthropic', category: 'AI assistant', verified: false, note: 'Detected by the Claude Code binary running from the anthropic.claude-code extension folder.' },
+  { id: 'claude-code-vscode', autoDetected: true, product: 'claude', connector: 'claude', appType: 'Extension', appName: 'Claude Code', processName: 'claude-code', parentApp: 'Visual Studio Code', subscriptionType: 'Claude', publisher: 'Anthropic', category: 'AI assistant', verified: false, note: 'Detected by the Claude Code binary running from the anthropic.claude-code extension folder.' },
   { id: 'codex-vscode', product: 'chatgpt', connector: 'codex', appType: 'Extension', appName: 'Codex', processName: 'codex', parentApp: 'Visual Studio Code', subscriptionType: 'ChatGPT Enterprise', publisher: 'OpenAI', category: 'AI assistant', verified: false, note: 'Built-in detection rule (codex.exe / codex in VS Code).' },
 
   // Enterprise infrastructure platforms (admin APIs; no Tracker detection)
@@ -51,14 +54,14 @@ export const APP_CATALOG = [
   { id: 'atlassian', connector: 'atlassian', appType: 'Platform', appName: 'Atlassian', api: 'Atlassian Organizations REST API', publisher: 'Atlassian', category: 'Collaboration platform', verified: false },
 
   // Web apps
-  { id: 'claude-web', product: 'claude', connector: 'claude', appType: 'Web URL', appName: 'Claude (web)', url: 'claude.ai', publisher: 'Anthropic', category: 'AI assistant', verified: false },
-  { id: 'chatgpt-web', product: 'chatgpt', connector: 'chatgpt', appType: 'Web URL', appName: 'ChatGPT (web)', url: 'chatgpt.com', publisher: 'OpenAI', category: 'AI assistant', verified: false },
+  { id: 'claude-web', autoDetected: true, product: 'claude', connector: 'claude', appType: 'Web URL', appName: 'Claude (web)', url: 'claude.ai', publisher: 'Anthropic', category: 'AI assistant', verified: false },
+  { id: 'chatgpt-web', autoDetected: true, product: 'chatgpt', connector: 'chatgpt', appType: 'Web URL', appName: 'ChatGPT (web)', url: 'chatgpt.com', publisher: 'OpenAI', category: 'AI assistant', verified: false },
   { id: 'copilot-web', product: 'copilot', connector: 'copilot', appType: 'Web URL', appName: 'GitHub Copilot (github.com)', url: 'github.com/copilot', publisher: 'GitHub', category: 'AI assistant', verified: false },
-  { id: 'slack-web', product: 'slack', connector: 'slack', appType: 'Web URL', appName: 'Slack (web)', url: 'app.slack.com', publisher: 'Salesforce', category: 'Collaboration', verified: false },
-  { id: 'zoom-web', product: 'zoom', connector: 'zoom', appType: 'Web URL', appName: 'Zoom (web)', url: 'app.zoom.us', publisher: 'Zoom', category: 'Collaboration', verified: false },
-  { id: 'postman-web', product: 'postman', connector: 'postman', appType: 'Web URL', appName: 'Postman (web)', url: 'web.postman.co', publisher: 'Postman', category: 'API tools', verified: false },
-  { id: 'vscode-web', product: 'vscode', connector: 'vscode', appType: 'Web URL', appName: 'VS Code (web)', url: 'vscode.dev', publisher: 'Microsoft', category: 'IDE', verified: false },
-  { id: 'figma-web', product: 'figma', connector: 'figma', appType: 'Web URL', appName: 'Figma (web)', url: 'figma.com', publisher: 'Figma', category: 'Design', verified: false },
+  { id: 'slack-web', autoDetected: true, product: 'slack', connector: 'slack', appType: 'Web URL', appName: 'Slack (web)', url: 'app.slack.com', publisher: 'Salesforce', category: 'Collaboration', verified: false },
+  { id: 'zoom-web', autoDetected: true, product: 'zoom', connector: 'zoom', appType: 'Web URL', appName: 'Zoom (web)', url: 'app.zoom.us', publisher: 'Zoom', category: 'Collaboration', verified: false },
+  { id: 'postman-web', autoDetected: true, product: 'postman', connector: 'postman', appType: 'Web URL', appName: 'Postman (web)', url: 'web.postman.co', publisher: 'Postman', category: 'API tools', verified: false },
+  { id: 'vscode-web', autoDetected: true, product: 'vscode', connector: 'vscode', appType: 'Web URL', appName: 'VS Code (web)', url: 'vscode.dev', publisher: 'Microsoft', category: 'IDE', verified: false },
+  { id: 'figma-web', autoDetected: true, product: 'figma', connector: 'figma', appType: 'Web URL', appName: 'Figma (web)', url: 'figma.com', publisher: 'Figma', category: 'Design', verified: false },
 ];
 
 const key = (value) => String(value || '').trim().toLowerCase();

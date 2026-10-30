@@ -912,6 +912,19 @@ function getUsageCounters(usageMap, appName) {
   return usageMap.get(appName) || createUsageCounters();
 }
 
+// A license is used through its own program, inside other apps (ext:<app>@<host>)
+// and in the browser (web:<app>); the Tracker reports each as its own row.
+function licenseWorkedSeconds(usageMap, appName) {
+  const name = String(appName || '').toLowerCase();
+  let total = 0;
+  usageMap.forEach((counters, key) => {
+    if (key === name || key === `web:${name}` || key.startsWith(`ext:${name}@`)) {
+      total += Number(counters.workedRuntimeSeconds) || 0;
+    }
+  });
+  return total;
+}
+
 function getUsageCountersForWindow(history, appName, windowEndsAt, windowSeconds) {
   const counters = createUsageCounters();
   const windowStartsAt = windowEndsAt - windowSeconds * 1000;
@@ -1978,8 +1991,9 @@ function licenseKey(value) {
   return String(value || '').toLowerCase().replace(/\.exe$/, '').replace(/[^a-z0-9]/g, '');
 }
 
+// Surfaces the Tracker has actually seen used.
 function trackedSurfaceCount(group) {
-  return group.surfaces.filter((surface) => !surface.notTracked).length;
+  return group.surfaces.filter((surface) => !surface.notTracked && surface.lastSeenAt).length;
 }
 
 function groupStatus(surfaces) {
@@ -1994,6 +2008,27 @@ function groupStatus(surfaces) {
   return { status: decider.status, reason: decider.reclaimReason || '' };
 }
 
+const SURFACE_ORDER = { 'Desktop app': 0, Extension: 1, 'Web app': 2 };
+
+function catalogSurfaceLabel(entry) {
+  if (entry.appType === 'Extension') return 'Extension';
+  if (entry.appType === 'Web URL') return 'Web app';
+  return 'Desktop app';
+}
+
+function emptySurface(fields) {
+  return {
+    status: '',
+    notTracked: true,
+    monthlyCost: 0,
+    totalRuntimeSeconds: 0,
+    workedRuntimeSeconds: 0,
+    automationWorkedSeconds: 0,
+    idleRuntimeSeconds: 0,
+    ...fields,
+  };
+}
+
 function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
   const subscriptionFor = (pcName, appName) => {
     const record = deploymentPolicyRecords.find(
@@ -2004,6 +2039,7 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
     );
     return record?.subscriptionType || '';
   };
+  const hostName = (host) => getReadableAppIdentity(host).displayName;
   const groups = [];
 
   deviceUsages.forEach((usage) => {
@@ -2028,35 +2064,79 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
       }
       return null;
     };
+    const groupByApp = new Map();
+    const hostedBy = new Map();
+    const noteHost = (host, name) => {
+      const hostKey = String(host || '').toLowerCase();
+      if (!hostedBy.has(hostKey)) hostedBy.set(hostKey, new Set());
+      hostedBy.get(hostKey).add(name);
+    };
 
     usage.usageByApp.forEach((entry) => {
       const catalog = findCatalogSurface({ appType: 'Application', processName: entry.appName });
       const name = (catalog && PRODUCTS[catalog.product]) || subscriptionFor(pcName, entry.appName) || entry.displayName;
-      addSurface(productKey(catalog) || licenseKey(name), name, entry.icon, {
+      const key = productKey(catalog) || licenseKey(name);
+      groupByApp.set(String(entry.appName).toLowerCase(), { key, name, icon: entry.icon });
+      addSurface(key, name, entry.icon, {
         ...entry,
+        hasAgentExtension: entry.hasAgentExtension || entry.automationWorkedSeconds > 0,
         surface: 'Desktop app',
         detail: entry.rawName || entry.appName,
         catalogId: catalog?.id,
         productId: catalog?.product,
       });
     });
+    const licenseOf = (appName) => groupByApp.get(String(appName || '').toLowerCase());
 
+    // Extensions with their own detection rule (GitHub Copilot, Codex).
     usage.usageByExtension.forEach((extension) => {
       const catalog = findCatalogSurface({ appType: 'Extension', processName: extension.name, appName: extension.name });
       const candidates = [...(extension.subscriptionTypes || []), extension.name];
       const key = productKey(catalog) || findGroup(candidates) || licenseKey(candidates[0]);
-      const hosts = extension.parentApps.map((parent) => getReadableAppIdentity(parent).displayName);
-      addSurface(key, (catalog && PRODUCTS[catalog.product]) || candidates[0], extension.icon, {
+      const name = (catalog && PRODUCTS[catalog.product]) || candidates[0];
+      const hosts = extension.parentApps.map(hostName);
+      extension.parentApps.forEach((parent) => noteHost(parent, name));
+      addSurface(key, name, extension.icon, {
         ...extension,
-        surface: hosts.length > 0 ? `Extension in ${hosts.join(', ')}` : 'Extension',
-        detail: extension.name,
+        surface: 'Extension',
+        detail: hosts.length > 0 ? `${extension.name} · used in ${hosts.join(', ')}` : extension.name,
         catalogId: catalog?.id,
         productId: catalog?.product,
       });
     });
 
-    // A tracked URL belongs to the license its address names (claude.ai -> Claude)
-    // or whose known web address it is.
+    // The licensed program itself working inside another app (Claude Code in VS Code).
+    usage.usageByEmbedded.forEach((row) => {
+      const license = licenseOf(row.appName);
+      if (!license) return;
+      noteHost(row.host, license.name);
+      addSurface(license.key, license.name, license.icon, {
+        ...row,
+        type: 'agent',
+        status: '',
+        monthlyCost: 0,
+        surface: 'Extension',
+        detail: `Used in ${hostName(row.host)}`,
+      });
+    });
+
+    // The license's web version open in the focused browser tab.
+    usage.usageByWeb.forEach((row) => {
+      const license = licenseOf(row.appName);
+      if (!license) return;
+      const group = pcGroups.get(license.key);
+      const web = productSurfaces(group?.productId).find((entry) => entry.appType === 'Web URL');
+      addSurface(license.key, license.name, license.icon, {
+        ...row,
+        status: '',
+        monthlyCost: 0,
+        surface: 'Web app',
+        detail: web ? `https://${web.url}` : KNOWN_WEB_APPS[license.key] || 'Web version',
+        catalogId: web?.id,
+      });
+    });
+
+    // Web addresses deployed from the inventory (Web URL items).
     usage.usageByUrl.forEach((url) => {
       const address = licenseKey(url.url);
       const host = webAddressHost(url.url);
@@ -2069,7 +2149,9 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
             (address.includes(candidate) || (host && webAddressHost(KNOWN_WEB_APPS[candidate]) === host))
         );
       if (!key) return;
-      pcGroups.get(key).surfaces.push({
+      const group = pcGroups.get(key);
+      if (group.surfaces.some((surface) => surface.surface === 'Web app' && !surface.notTracked)) return;
+      group.surfaces.push({
         ...url,
         catalogId: catalog?.id,
         surface: 'Web app',
@@ -2080,67 +2162,45 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
       });
     });
 
-    // A recognised product lists all its surfaces; one not deployed or tracked says so.
-    pcGroups.forEach((group) => {
-      const present = new Set(group.surfaces.map((surface) => surface.catalogId).filter(Boolean));
-      productSurfaces(group.productId)
-        .filter((entry) => !present.has(entry.id))
-        .forEach((entry) => {
-          const surface =
-            entry.appType === 'Extension'
-              ? `Extension in ${entry.parentApp}`
-              : entry.appType === 'Web URL'
-                ? 'Web app'
-                : 'Desktop app';
-          group.surfaces.push({
-            surface,
+    pcGroups.forEach((group, key) => {
+      // A recognised product shows each kind of surface it has; one not seen yet says so.
+      const present = new Set(group.surfaces.map((surface) => surface.surface));
+      productSurfaces(group.productId).forEach((entry) => {
+        const label = catalogSurfaceLabel(entry);
+        if (present.has(label)) return;
+        present.add(label);
+        group.surfaces.push(
+          emptySurface({
+            surface: label,
+            catalogId: entry.id,
             detail:
-              entry.appType === 'Web URL'
+              label === 'Web app'
                 ? `https://${entry.url}`
-                : entry.appType === 'Extension'
+                : label === 'Extension'
                   ? entry.appName
                   : entry.processName || entry.appName,
-            catalogId: entry.id,
-            status: '',
-            notTracked: true,
-            monthlyCost: 0,
-            totalRuntimeSeconds: 0,
-            workedRuntimeSeconds: 0,
-            automationWorkedSeconds: 0,
-            idleRuntimeSeconds: 0,
-          });
-        });
-      const order = { 'Desktop app': 0, 'Web app': 2 };
-      group.surfaces.sort((first, second) => (order[first.surface] ?? 1) - (order[second.surface] ?? 1));
-    });
-
-    // Every license shows its web line; one the Trackers do not watch yet says so.
-    pcGroups.forEach((group, key) => {
-      if (group.surfaces.some((surface) => surface.surface === 'Web app')) return;
-      group.surfaces.push({
-        surface: 'Web app',
-        detail: KNOWN_WEB_APPS[key] || 'No web address set',
-        status: '',
-        notTracked: true,
-        monthlyCost: 0,
-        totalRuntimeSeconds: 0,
-        workedRuntimeSeconds: 0,
-        automationWorkedSeconds: 0,
-        idleRuntimeSeconds: 0,
+          })
+        );
       });
+      // Every license shows its web line.
+      if (!present.has('Web app')) {
+        group.surfaces.push(
+          emptySurface({ surface: 'Web app', detail: KNOWN_WEB_APPS[key] || 'No web address set' })
+        );
+      }
+      group.surfaces.sort(
+        (first, second) => (SURFACE_ORDER[first.surface] ?? 1) - (SURFACE_ORDER[second.surface] ?? 1)
+      );
     });
 
     pcGroups.forEach((group) => {
       const hostApps = group.surfaces
-        .filter((surface) => surface.surface === 'Desktop app')
+        .filter((surface) => surface.surface === 'Desktop app' && surface.appName)
         .map((surface) => String(surface.appName).toLowerCase());
-      group.hostsExtensions = usage.usageByExtension
-        .filter((extension) => extension.parentApps.some((parent) => hostApps.includes(String(parent).toLowerCase())))
-        .map((extension) => {
-          const candidates = [...(extension.subscriptionTypes || []), extension.name];
-          return { name: candidates[0], groupId: `${pcName}|${findGroup(candidates) || licenseKey(candidates[0])}` };
-        })
-        .filter((host) => host.groupId !== group.id);
+      const hosted = new Set();
+      hostApps.forEach((host) => (hostedBy.get(host) || []).forEach((name) => hosted.add(name)));
+      hosted.delete(group.name);
+      group.hostsExtensions = [...hosted].map((name) => ({ name }));
       const decided = group.surfaces.filter((surface) => surface.status);
       const { status, reason } = groupStatus(decided);
       const sum = (field) => group.surfaces.reduce((total, surface) => total + (Number(surface[field]) || 0), 0);
@@ -2241,7 +2301,7 @@ function computeCompletedDecisions({
       getAppPolicy(config, appName),
       { type }
     );
-    addDecision(appName, type, policy, counters.workedRuntimeSeconds);
+    addDecision(appName, type, policy, licenseWorkedSeconds(countersByName, appName));
   });
 
   getUniqueExtensionRules(config.extensions || []).forEach((extension) => {
@@ -2451,7 +2511,10 @@ function computeDeviceUsage({
         : getLastSeenAt(config, telemetryHistory, appName);
       const hasAgentExtension = appHasAgentExtension(config, appName);
       const notInstalled = installedApps?.[String(appName).toLowerCase()] === false;
-      const policyUsageCounters = usageCounters;
+      const policyUsageCounters = {
+        ...usageCounters,
+        workedRuntimeSeconds: licenseWorkedSeconds(accumulatedUsage, appName),
+      };
       const reclaimDecision = getReclaimDecision({
         policy: reclaimPolicy,
         workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
@@ -2500,6 +2563,34 @@ function computeDeviceUsage({
       ...getUsageCounters(accumulatedUsage, `url:${url}`),
     }));
   })();
+
+  // Surfaces the Tracker found on its own; listed once seen in any sample, with
+  // this window's counters.
+  const surfaceNames = new Set();
+  telemetryHistory.forEach((payload) =>
+    getUsageEntries(payload).forEach((entry) => {
+      const name = String(entry.app_name || '');
+      if (name.startsWith('ext:') || name.startsWith('web:')) surfaceNames.add(name);
+    })
+  );
+  const surfaceRow = (name, fields) => {
+    const counters = getUsageCounters(accumulatedUsage, name);
+    return {
+      ...fields,
+      ...counters,
+      totalRuntimeSeconds: counters.trackedRuntimeSeconds,
+      lastSeenAt: getLastSeenAt(null, telemetryHistory, name),
+    };
+  };
+  const usageByEmbedded = [...surfaceNames]
+    .filter((name) => name.startsWith('ext:'))
+    .map((name) => {
+      const [appName, host] = name.slice('ext:'.length).split('@');
+      return surfaceRow(name, { appName, host });
+    });
+  const usageByWeb = [...surfaceNames]
+    .filter((name) => name.startsWith('web:'))
+    .map((name) => surfaceRow(name, { appName: name.slice('web:'.length) }));
 
   const usageByExtension = (() => {
     if (!config?.extensions) return [];
@@ -2622,6 +2713,8 @@ function computeDeviceUsage({
     usageByApp,
     usageByUrl,
     usageByExtension,
+    usageByEmbedded,
+    usageByWeb,
     newDecisions,
   };
 }
@@ -3238,6 +3331,7 @@ export default function App({ user = null, onSignOut = null }) {
       if (appMap.has(appName)) return;
       if (appName.startsWith('url:')) return;
       if (appName.startsWith('ai_model:')) return;
+      if (appName.startsWith('ext:') || appName.startsWith('web:')) return;
       if (trackedUrlNames.has(appName)) return;
       if (extensionNames.has(appName)) return;
 
@@ -3809,7 +3903,7 @@ export default function App({ user = null, onSignOut = null }) {
     if (!entry?.product || editingInventoryAppId) return [];
     if (entry.appType !== licenseAppForm.appType || entry.appName !== licenseAppForm.appName) return [];
     return productSurfaces(entry.product)
-      .filter((surface) => surface.id !== entry.id && !inventoryMatch(surface, licensedApps))
+      .filter((surface) => surface.id !== entry.id && !surface.autoDetected && !inventoryMatch(surface, licensedApps))
       .map((surface) => ({
         ...surface,
         parentReady:
@@ -5567,9 +5661,10 @@ export default function App({ user = null, onSignOut = null }) {
               <div>
                 <h2>Licenses</h2>
                 <p>
-                  One row per license on each PC, with the desktop app, extensions and
-                  web use it is tracked through. License decisions are finalized at the
-                  end of each evaluation window.
+                  One row per license on each PC, with its desktop app, extension and
+                  web use underneath; the Tracker finds extension and web use on its own.
+                  License decisions count all of them and are finalized at the end of
+                  each evaluation window.
                 </p>
                 <div className="tracking-window-meta">
                   <span>
@@ -5718,14 +5813,16 @@ export default function App({ user = null, onSignOut = null }) {
                               </td>
                               <td>
                                 {surface.notTracked ? (
-                                  <span className="muted-value">Not tracked</span>
+                                  <span className="muted-value">Not detected yet</span>
                                 ) : surface.status === 'Not installed' ? (
                                   <span className={`status-badge ${getStatusBadgeClass(surface.status)}`}>
                                     {surface.status}
                                   </span>
                                 ) : (
                                   <span className="muted-value">
-                                    {surface.lastSeenAt ? `Last used ${formatDateTime(surface.lastSeenAt)}` : ''}
+                                    {surface.lastSeenAt
+                                      ? `Last used ${formatDateTime(surface.lastSeenAt)}`
+                                      : 'Not detected yet'}
                                   </span>
                                 )}
                               </td>
