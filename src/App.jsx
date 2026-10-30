@@ -1924,6 +1924,233 @@ function getTelemetryPcName(payload) {
   );
 }
 
+const OFFLINE_AFTER_MS = 15 * 60 * 1000;
+
+// One Tracker's samples through its evaluation window and reclaim policies.
+// App runs it for the focused device, and for every registered device in the
+// License Utilizations table.
+function computeDeviceUsage({
+  telemetryHistory,
+  savedConfig,
+  deploymentPolicyRecords,
+  lastDeploymentConfig,
+  onboardedAppLicenses,
+  costOverrides,
+  completedEvaluationDecisions,
+  currentTimeMs,
+}) {
+  const latestTelemetry = telemetryHistory.at(-1) || null;
+  // An offline Tracker is evaluated as of its last sample, so its last
+  // recorded usage shows instead of an empty current window.
+  const latestSampleMs = getTelemetryTimestampMs(latestTelemetry);
+  if (latestSampleMs && currentTimeMs - latestSampleMs > OFFLINE_AFTER_MS) {
+    currentTimeMs = latestSampleMs;
+  }
+  const currentPcName = getTelemetryPcName(latestTelemetry);
+  // Trackers no longer serve their runtime config to the browser (telemetry
+  // goes through the backend), so derive it from the saved deployment records
+  // when no stored config exists.
+  const config =
+    savedConfig || deriveTrackerConfig(deploymentPolicyRecords, lastDeploymentConfig, currentPcName);
+  const effectiveUsageWindowSeconds =
+    config?.usage_window_seconds || DEFAULT_USAGE_WINDOW_SECONDS;
+  const fallbackEvaluationWindowSeconds = getOnboardedEvaluationWindowSeconds(
+    onboardedAppLicenses,
+    DEFAULT_RECLAIM_POLICY.evaluation_window_seconds
+  );
+  const effectiveEvaluationWindow = getDeploymentEvaluationWindowConfig(
+    deploymentPolicyRecords,
+    currentPcName,
+    fallbackEvaluationWindowSeconds
+  );
+  const effectiveEvaluationWindowSeconds = effectiveEvaluationWindow.seconds;
+
+  const telemetryWindow = (() => {
+    const latestTimestampMs = getTelemetryTimestampMs(latestTelemetry);
+    const fallbackTimestampMs = Date.now();
+    const windowEndsAt = latestTimestampMs || fallbackTimestampMs;
+    const windowStartsAt = windowEndsAt - effectiveUsageWindowSeconds * 1000;
+
+    const windowHistory = telemetryHistory.filter((payload) => {
+      const timestampMs = getTelemetryTimestampMs(payload);
+      return timestampMs !== null && timestampMs >= windowStartsAt;
+    });
+
+    const firstSampleTimestampMs =
+      windowHistory.length > 0
+        ? getTelemetryTimestampMs(windowHistory[0])
+        : null;
+
+    return {
+      history: windowHistory,
+      startsAt: firstSampleTimestampMs || windowStartsAt,
+      endsAt: windowEndsAt,
+      sampleCount: windowHistory.length,
+    };
+  })();
+
+  const evaluationSeriesStartsAt = (() => {
+    if (effectiveEvaluationWindow.startsAt) return effectiveEvaluationWindow.startsAt;
+    const firstTelemetryTimestamp = telemetryHistory
+      .map(getTelemetryTimestampMs)
+      .filter((value) => value !== null)
+      .sort((first, second) => first - second)[0];
+    return firstTelemetryTimestamp || telemetryWindow.endsAt;
+  })();
+
+  const evaluationWindow = (() => {
+    const baseWindow = getCurrentEvaluationWindow(
+      evaluationSeriesStartsAt,
+      evaluationSeriesStartsAt + effectiveEvaluationWindowSeconds * 1000,
+      currentTimeMs
+    );
+    const windowStartsAt = baseWindow.startsAt;
+    const windowEndsAt = baseWindow.endsAt;
+    const windowHistory = telemetryHistory.filter((payload) => {
+      const timestampMs = getTelemetryTimestampMs(payload);
+      return (
+        timestampMs !== null &&
+        timestampMs >= windowStartsAt &&
+        timestampMs <= windowEndsAt
+      );
+    });
+
+    return {
+      history: windowHistory,
+      startsAt: windowStartsAt,
+      endsAt: windowEndsAt,
+      sampleCount: windowHistory.length,
+      isAgentReported: false,
+      hasExpiredReportedWindow: false,
+    };
+  })();
+
+  const accumulatedUsage = (() => {
+    const usageMap = new Map();
+
+    if (evaluationWindow.hasExpiredReportedWindow) {
+      return usageMap;
+    }
+
+    const history = evaluationWindow.history;
+
+    history.forEach((payload) => {
+      getUsageEntries(payload).forEach((entry) => {
+        const existing = usageMap.get(entry.app_name) || createUsageCounters();
+        const next = readUsageCounters(entry);
+        usageMap.set(entry.app_name, {
+          trackedRuntimeSeconds:
+            existing.trackedRuntimeSeconds + next.trackedRuntimeSeconds,
+          foregroundRuntimeSeconds:
+            existing.foregroundRuntimeSeconds + next.foregroundRuntimeSeconds,
+          workedRuntimeSeconds:
+            existing.workedRuntimeSeconds + next.workedRuntimeSeconds,
+          automationWorkedSeconds:
+            existing.automationWorkedSeconds + next.automationWorkedSeconds,
+          backgroundAutomationWorkedSeconds:
+            existing.backgroundAutomationWorkedSeconds +
+            next.backgroundAutomationWorkedSeconds,
+          idleRuntimeSeconds:
+            existing.idleRuntimeSeconds + next.idleRuntimeSeconds,
+          consumedTokens: existing.consumedTokens + next.consumedTokens,
+          selectedAiModel: next.selectedAiModel || existing.selectedAiModel,
+          tokenSource: next.tokenSource || existing.tokenSource,
+        });
+      });
+    });
+    return usageMap;
+  })();
+
+  const usageByApp = (() => {
+    if (!config) return [];
+
+    return config.licensed_apps.map((appName, index) => {
+      const appIdentity = getReadableAppIdentity(appName);
+      const usageCounters = getUsageCounters(accumulatedUsage, appName);
+      const totalRuntimeSeconds = usageCounters.trackedRuntimeSeconds;
+      const workedRuntimeSeconds = usageCounters.workedRuntimeSeconds;
+      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
+      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
+      const baseMonthlyCost = getMonthlyCost(appName, index);
+      const monthlyCost = getSyncedAppCost(
+        costOverrides,
+        currentPcName,
+        appName,
+        baseMonthlyCost
+      );
+      const appType = getAppType(config, appName);
+      const reclaimPolicy = getStoredReclaimPolicy(
+        deploymentPolicyRecords,
+        currentPcName,
+        appName,
+        getAppPolicy(config, appName),
+        { type: appType }
+      );
+      const firstSeenAt = getAppFirstSeenAt(config, appName);
+      const telemetryLastResetForAppMs = getTelemetryLastResetForAppMs(
+        latestTelemetry,
+        appName
+      );
+      const lastSeenAt = telemetryLastResetForAppMs
+        ? new Date(telemetryLastResetForAppMs).toISOString()
+        : getLastSeenAt(config, telemetryHistory, appName);
+      const hasAgentExtension = appHasAgentExtension(config, appName);
+      const policyUsageCounters = usageCounters;
+      const reclaimDecision = getReclaimDecision({
+        policy: reclaimPolicy,
+        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
+        previousDecision:
+          completedEvaluationDecisions[
+            getEvaluationDecisionKey(
+              currentPcName,
+              appType,
+              appName,
+              evaluationSeriesStartsAt
+            )
+          ],
+      });
+
+      return {
+        appName,
+        ...appIdentity,
+        pcName: currentPcName,
+        icon: getAppIcon(appIdentity.displayName),
+        status: reclaimDecision.status,
+        appType,
+        hasAgentExtension,
+        reclaimReason: reclaimDecision.reason,
+        firstSeenAt,
+        lastSeenAt,
+        reclaimPolicy,
+        totalRuntimeSeconds,
+        workedRuntimeSeconds,
+        automationWorkedSeconds,
+        idleRuntimeSeconds,
+        utilizationPercent: getPolicyUtilizationPercent(
+          workedRuntimeSeconds,
+          reclaimPolicy
+        ),
+        monthlyCost,
+        savingsOpportunity: reclaimDecision.savingsEligible ? monthlyCost : 0,
+      };
+    });
+  })();
+
+  return {
+    latestTelemetry,
+    currentPcName,
+    config,
+    effectiveUsageWindowSeconds,
+    effectiveEvaluationWindow,
+    effectiveEvaluationWindowSeconds,
+    telemetryWindow,
+    evaluationSeriesStartsAt,
+    evaluationWindow,
+    accumulatedUsage,
+    usageByApp,
+  };
+}
+
 function getHourlyEngagementKey(timestampMs) {
   const date = new Date(timestampMs);
   date.setMinutes(0, 0, 0);
@@ -2353,143 +2580,56 @@ export default function App({ user = null, onSignOut = null }) {
     },
   }[activeView];
 
-  const currentPcName = useMemo(
-    () => getTelemetryPcName(latestTelemetry),
-    [latestTelemetry]
+  const usageInputs = useMemo(
+    () => ({
+      savedConfig,
+      deploymentPolicyRecords,
+      lastDeploymentConfig,
+      onboardedAppLicenses,
+      costOverrides,
+      completedEvaluationDecisions,
+      currentTimeMs,
+    }),
+    [
+      completedEvaluationDecisions,
+      costOverrides,
+      currentTimeMs,
+      deploymentPolicyRecords,
+      lastDeploymentConfig,
+      onboardedAppLicenses,
+      savedConfig,
+    ]
   );
-
-  // Trackers no longer serve their runtime config to the browser (telemetry
-  // goes through the backend), so derive the dashboard's view of it from the
-  // saved deployment records when no stored config exists.
-  const config = useMemo(
-    () => savedConfig || deriveTrackerConfig(deploymentPolicyRecords, lastDeploymentConfig, currentPcName),
-    [savedConfig, deploymentPolicyRecords, lastDeploymentConfig, currentPcName]
+  const focusUsage = useMemo(
+    () => computeDeviceUsage({ ...usageInputs, telemetryHistory }),
+    [telemetryHistory, usageInputs]
   );
-
-  const effectiveUsageWindowSeconds =
-    config?.usage_window_seconds || DEFAULT_USAGE_WINDOW_SECONDS;
-  const fallbackEvaluationWindowSeconds = getOnboardedEvaluationWindowSeconds(
-    onboardedAppLicenses,
-    DEFAULT_RECLAIM_POLICY.evaluation_window_seconds
-  );
-  const effectiveEvaluationWindow = useMemo(
-    () =>
-      getDeploymentEvaluationWindowConfig(
-        deploymentPolicyRecords,
-        currentPcName,
-        fallbackEvaluationWindowSeconds
-      ),
-    [currentPcName, deploymentPolicyRecords, fallbackEvaluationWindowSeconds]
-  );
-  const effectiveEvaluationWindowSeconds = effectiveEvaluationWindow.seconds;
-
-  const telemetryWindow = useMemo(() => {
-    const latestTimestampMs = getTelemetryTimestampMs(latestTelemetry);
-    const fallbackTimestampMs = Date.now();
-    const windowEndsAt = latestTimestampMs || fallbackTimestampMs;
-    const windowStartsAt = windowEndsAt - effectiveUsageWindowSeconds * 1000;
-
-    const windowHistory = telemetryHistory.filter((payload) => {
-      const timestampMs = getTelemetryTimestampMs(payload);
-      return timestampMs !== null && timestampMs >= windowStartsAt;
-    });
-
-    const firstSampleTimestampMs =
-      windowHistory.length > 0
-        ? getTelemetryTimestampMs(windowHistory[0])
-        : null;
-
-    return {
-      history: windowHistory,
-      startsAt: firstSampleTimestampMs || windowStartsAt,
-      endsAt: windowEndsAt,
-      sampleCount: windowHistory.length,
-    };
-  }, [effectiveUsageWindowSeconds, latestTelemetry, telemetryHistory]);
-
-  const evaluationSeriesStartsAt = useMemo(() => {
-    if (effectiveEvaluationWindow.startsAt) return effectiveEvaluationWindow.startsAt;
-    const firstTelemetryTimestamp = telemetryHistory
-      .map(getTelemetryTimestampMs)
-      .filter((value) => value !== null)
-      .sort((first, second) => first - second)[0];
-    return firstTelemetryTimestamp || telemetryWindow.endsAt;
-  }, [
-    effectiveEvaluationWindow.startsAt,
-    telemetryHistory,
-    telemetryWindow.endsAt,
-  ]);
-
-  const evaluationWindow = useMemo(() => {
-    const baseWindow = getCurrentEvaluationWindow(
-      evaluationSeriesStartsAt,
-      evaluationSeriesStartsAt + effectiveEvaluationWindowSeconds * 1000,
-      currentTimeMs
-    );
-    const windowStartsAt = baseWindow.startsAt;
-    const windowEndsAt = baseWindow.endsAt;
-    const windowHistory = telemetryHistory.filter((payload) => {
-      const timestampMs = getTelemetryTimestampMs(payload);
-      return (
-        timestampMs !== null &&
-        timestampMs >= windowStartsAt &&
-        timestampMs <= windowEndsAt
-      );
-    });
-
-    return {
-      history: windowHistory,
-      startsAt: windowStartsAt,
-      endsAt: windowEndsAt,
-      sampleCount: windowHistory.length,
-      isAgentReported: false,
-      hasExpiredReportedWindow: false,
-    };
-  }, [
-    currentTimeMs,
+  const {
+    currentPcName,
+    config,
+    effectiveUsageWindowSeconds,
+    effectiveEvaluationWindow,
     effectiveEvaluationWindowSeconds,
+    telemetryWindow,
     evaluationSeriesStartsAt,
-    telemetryHistory,
-  ]);
-
-  const accumulatedUsage = useMemo(() => {
-    const usageMap = new Map();
-
-    if (evaluationWindow.hasExpiredReportedWindow) {
-      return usageMap;
-    }
-
-    const history = evaluationWindow.history;
-
-    history.forEach((payload) => {
-      getUsageEntries(payload).forEach((entry) => {
-        const existing = usageMap.get(entry.app_name) || createUsageCounters();
-        const next = readUsageCounters(entry);
-        usageMap.set(entry.app_name, {
-          trackedRuntimeSeconds:
-            existing.trackedRuntimeSeconds + next.trackedRuntimeSeconds,
-          foregroundRuntimeSeconds:
-            existing.foregroundRuntimeSeconds + next.foregroundRuntimeSeconds,
-          workedRuntimeSeconds:
-            existing.workedRuntimeSeconds + next.workedRuntimeSeconds,
-          automationWorkedSeconds:
-            existing.automationWorkedSeconds + next.automationWorkedSeconds,
-          backgroundAutomationWorkedSeconds:
-            existing.backgroundAutomationWorkedSeconds +
-            next.backgroundAutomationWorkedSeconds,
-          idleRuntimeSeconds:
-            existing.idleRuntimeSeconds + next.idleRuntimeSeconds,
-          consumedTokens: existing.consumedTokens + next.consumedTokens,
-          selectedAiModel: next.selectedAiModel || existing.selectedAiModel,
-          tokenSource: next.tokenSource || existing.tokenSource,
-        });
-      });
+    evaluationWindow,
+    accumulatedUsage,
+    usageByApp,
+  } = focusUsage;
+  // License Utilizations lists every registered device, online or not.
+  const allDevicesUsageByApp = useMemo(() => {
+    const historyByDevice = new Map();
+    allTelemetryHistory.forEach((sample) => {
+      if (!sample.device_id) return;
+      if (!historyByDevice.has(sample.device_id)) historyByDevice.set(sample.device_id, []);
+      historyByDevice.get(sample.device_id).push(sample);
     });
-    return usageMap;
-  }, [
-    evaluationWindow.hasExpiredReportedWindow,
-    evaluationWindow.history,
-  ]);
+    return deviceOwners.flatMap((device) => {
+      if (device.deviceId === focusDeviceId) return usageByApp;
+      const history = historyByDevice.get(device.deviceId);
+      return history ? computeDeviceUsage({ ...usageInputs, telemetryHistory: history }).usageByApp : [];
+    });
+  }, [allTelemetryHistory, deviceOwners, focusDeviceId, usageByApp, usageInputs]);
 
   useEffect(() => {
     const originalStartsAt = evaluationSeriesStartsAt;
@@ -2593,93 +2733,6 @@ export default function App({ user = null, onSignOut = null }) {
     telemetryHistory,
   ]);
 
-  const usageByApp = useMemo(() => {
-    if (!config) return [];
-
-    return config.licensed_apps.map((appName, index) => {
-      const appIdentity = getReadableAppIdentity(appName);
-      const usageCounters = getUsageCounters(accumulatedUsage, appName);
-      const totalRuntimeSeconds = usageCounters.trackedRuntimeSeconds;
-      const workedRuntimeSeconds = usageCounters.workedRuntimeSeconds;
-      const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
-      const idleRuntimeSeconds = usageCounters.idleRuntimeSeconds;
-      const baseMonthlyCost = getMonthlyCost(appName, index);
-      const monthlyCost = getSyncedAppCost(
-        costOverrides,
-        currentPcName,
-        appName,
-        baseMonthlyCost
-      );
-      const appType = getAppType(config, appName);
-      const reclaimPolicy = getStoredReclaimPolicy(
-        deploymentPolicyRecords,
-        currentPcName,
-        appName,
-        getAppPolicy(config, appName),
-        { type: appType }
-      );
-      const firstSeenAt = getAppFirstSeenAt(config, appName);
-      const telemetryLastResetForAppMs = getTelemetryLastResetForAppMs(
-        latestTelemetry,
-        appName
-      );
-      const lastSeenAt = telemetryLastResetForAppMs
-        ? new Date(telemetryLastResetForAppMs).toISOString()
-        : getLastSeenAt(config, telemetryHistory, appName);
-      const hasAgentExtension = appHasAgentExtension(config, appName);
-      const policyUsageCounters = usageCounters;
-      const reclaimDecision = getReclaimDecision({
-        policy: reclaimPolicy,
-        workedRuntimeSeconds: policyUsageCounters.workedRuntimeSeconds,
-        previousDecision:
-          completedEvaluationDecisions[
-            getEvaluationDecisionKey(
-              currentPcName,
-              appType,
-              appName,
-              evaluationSeriesStartsAt
-            )
-          ],
-      });
-
-      return {
-        appName,
-        ...appIdentity,
-        pcName: currentPcName,
-        icon: getAppIcon(appIdentity.displayName),
-        status: reclaimDecision.status,
-        appType,
-        hasAgentExtension,
-        reclaimReason: reclaimDecision.reason,
-        firstSeenAt,
-        lastSeenAt,
-        reclaimPolicy,
-        totalRuntimeSeconds,
-        workedRuntimeSeconds,
-        automationWorkedSeconds,
-        idleRuntimeSeconds,
-        utilizationPercent: getPolicyUtilizationPercent(
-          workedRuntimeSeconds,
-          reclaimPolicy
-        ),
-        monthlyCost,
-        savingsOpportunity: reclaimDecision.savingsEligible ? monthlyCost : 0,
-      };
-    });
-  }, [
-    config,
-    accumulatedUsage,
-    completedEvaluationDecisions,
-    costOverrides,
-    currentPcName,
-    currentTimeMs,
-    deploymentPolicyRecords,
-    evaluationSeriesStartsAt,
-    evaluationWindow.isAgentReported,
-    latestTelemetry,
-    telemetryHistory,
-    telemetryWindow.endsAt,
-  ]);
 
   const usageByUrl = useMemo(() => {
     if (!config?.tracked_urls) return [];
@@ -2955,21 +3008,21 @@ export default function App({ user = null, onSignOut = null }) {
   ]);
 
   const aggregates = useMemo(() => {
-    const totalWaste = usageByApp.reduce(
+    const totalWaste = allDevicesUsageByApp.reduce(
       (sum, entry) => sum + entry.savingsOpportunity,
       0
     );
-    const activeCost = usageByApp.reduce(
+    const activeCost = allDevicesUsageByApp.reduce(
       (sum, entry) =>
         entry.status === 'Active' ? sum + entry.monthlyCost : sum,
       0
     );
-    const trackedMonthlyCost = usageByApp.reduce(
+    const trackedMonthlyCost = allDevicesUsageByApp.reduce(
       (sum, entry) => sum + entry.monthlyCost,
       0
     );
-    const activeSeats = usageByApp.filter((entry) => entry.status === 'Active').length;
-    const totalSeats = usageByApp.length;
+    const activeSeats = allDevicesUsageByApp.filter((entry) => entry.status === 'Active').length;
+    const totalSeats = allDevicesUsageByApp.length;
     const activeExtensions = usageByExtension.filter(
       (entry) => entry.type === 'agent' && entry.status === 'Active'
     ).length;
@@ -3036,7 +3089,7 @@ export default function App({ user = null, onSignOut = null }) {
       totalExtensionSavings,
       licenseEfficiencyScore,
     };
-  }, [usageByApp, usageByExtension]);
+  }, [allDevicesUsageByApp, usageByExtension]);
 
   const extensionAttributionRows = useMemo(
     () =>
@@ -3064,7 +3117,7 @@ export default function App({ user = null, onSignOut = null }) {
   );
 
   const sortedUsageByApp = useMemo(() => {
-    const sortableRows = [...usageByApp];
+    const sortableRows = [...allDevicesUsageByApp];
 
     sortableRows.sort((firstRow, secondRow) => {
       const firstValue = firstRow[sortConfig.key];
@@ -3090,7 +3143,7 @@ export default function App({ user = null, onSignOut = null }) {
     });
 
     return sortableRows;
-  }, [usageByApp, sortConfig]);
+  }, [allDevicesUsageByApp, sortConfig]);
 
   const costReductionBars = useMemo(
     () => [
@@ -5259,7 +5312,7 @@ export default function App({ user = null, onSignOut = null }) {
                 </thead>
                 <tbody>
                   {sortedUsageByApp.map((entry) => (
-                    <tr key={entry.appName}>
+                    <tr key={`${entry.pcName}|${entry.appName}`}>
                       <td>
                         <span className="pc-name-chip">{entry.pcName}</span>
                       </td>
