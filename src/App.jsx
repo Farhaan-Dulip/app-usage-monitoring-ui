@@ -1924,7 +1924,109 @@ function getTelemetryPcName(payload) {
   );
 }
 
-const OFFLINE_AFTER_MS = 15 * 60 * 1000;
+const DEVICE_LIVE_MS = 15 * 60 * 1000;
+
+// Older Trackers send no installed_apps; RabbitMQ events nest the sample in `usage`.
+function getInstalledApps(payload) {
+  const installed = payload?.usage?.installed_apps || payload?.installed_apps;
+  return installed && typeof installed === 'object' && !Array.isArray(installed) ? installed : null;
+}
+
+// Decisions for the evaluation window that has just closed. A window with no
+// samples (PC off or offline) still closes, with zero worked runtime.
+function computeCompletedDecisions({
+  telemetryHistory,
+  config,
+  currentPcName,
+  deploymentPolicyRecords,
+  evaluationSeriesStartsAt,
+  evaluationWindow,
+  effectiveEvaluationWindowSeconds,
+  completedEvaluationDecisions,
+}) {
+  const originalStartsAt = evaluationSeriesStartsAt;
+  if (!config || !originalStartsAt || evaluationWindow.startsAt <= originalStartsAt) {
+    return {};
+  }
+
+  const completedAt = evaluationWindow.startsAt;
+  const completedStartsAt = completedAt - effectiveEvaluationWindowSeconds * 1000;
+  const countersByName = new Map();
+  telemetryHistory.forEach((payload) => {
+    const timestampMs = getTelemetryTimestampMs(payload);
+    if (
+      timestampMs === null ||
+      timestampMs < completedStartsAt ||
+      timestampMs >= completedAt
+    ) return;
+
+    getUsageEntries(payload).forEach((entry) => {
+      const current = countersByName.get(entry.app_name) || createUsageCounters();
+      const next = readUsageCounters(entry);
+      Object.keys(current).forEach((key) => {
+        if (typeof current[key] === 'number') current[key] += Number(next[key]) || 0;
+      });
+      countersByName.set(entry.app_name, current);
+    });
+  });
+
+
+  const nextDecisions = {};
+  const addDecision = (name, type, policy, workedRuntimeSeconds, consumedTokens = 0) => {
+    const key = getEvaluationDecisionKey(
+      currentPcName,
+      type,
+      name,
+      originalStartsAt
+    );
+    const existing = completedEvaluationDecisions[key];
+    if (existing?.completedAt >= completedAt) return;
+    nextDecisions[key] = {
+      ...getReclaimDecision({
+        policy,
+        workedRuntimeSeconds,
+        consumedTokens,
+        evaluationComplete: true,
+      }),
+      completedAt,
+    };
+  };
+
+  (config.licensed_apps || []).forEach((appName) => {
+    const counters = countersByName.get(appName) || createUsageCounters();
+    const type = getAppType(config, appName);
+    const policy = getStoredReclaimPolicy(
+      deploymentPolicyRecords,
+      currentPcName,
+      appName,
+      getAppPolicy(config, appName),
+      { type }
+    );
+    addDecision(appName, type, policy, counters.workedRuntimeSeconds);
+  });
+
+  getUniqueExtensionRules(config.extensions || []).forEach((extension) => {
+    const counters = countersByName.get(extension.name) || createUsageCounters();
+    const policy = getStoredReclaimPolicy(
+      deploymentPolicyRecords,
+      currentPcName,
+      extension.name,
+      extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY,
+      { type: extension.type, parentApp: extension.parentApps }
+    );
+    addDecision(
+      extension.name,
+      extension.type,
+      policy,
+      extension.type === 'agent'
+        ? counters.automationWorkedSeconds
+        : counters.workedRuntimeSeconds,
+      counters.consumedTokens
+    );
+  });
+
+  return nextDecisions;
+}
 
 // One Tracker's samples through its evaluation window and reclaim policies.
 // App runs it for the focused device, and for every registered device in the
@@ -1936,16 +2038,10 @@ function computeDeviceUsage({
   lastDeploymentConfig,
   onboardedAppLicenses,
   costOverrides,
-  completedEvaluationDecisions,
+  completedEvaluationDecisions: storedEvaluationDecisions,
   currentTimeMs,
 }) {
   const latestTelemetry = telemetryHistory.at(-1) || null;
-  // An offline Tracker is evaluated as of its last sample, so its last
-  // recorded usage shows instead of an empty current window.
-  const latestSampleMs = getTelemetryTimestampMs(latestTelemetry);
-  if (latestSampleMs && currentTimeMs - latestSampleMs > OFFLINE_AFTER_MS) {
-    currentTimeMs = latestSampleMs;
-  }
   const currentPcName = getTelemetryPcName(latestTelemetry);
   // Trackers no longer serve their runtime config to the browser (telemetry
   // goes through the backend), so derive it from the saved deployment records
@@ -2025,6 +2121,18 @@ function computeDeviceUsage({
     };
   })();
 
+  const newDecisions = computeCompletedDecisions({
+    telemetryHistory,
+    config,
+    currentPcName,
+    deploymentPolicyRecords,
+    evaluationSeriesStartsAt,
+    evaluationWindow,
+    effectiveEvaluationWindowSeconds,
+    completedEvaluationDecisions: storedEvaluationDecisions,
+  });
+  const completedEvaluationDecisions = { ...storedEvaluationDecisions, ...newDecisions };
+
   const accumulatedUsage = (() => {
     const usageMap = new Map();
 
@@ -2061,6 +2169,14 @@ function computeDeviceUsage({
     return usageMap;
   })();
 
+  // While the PC is live, its latest report says which deployed apps the
+  // Tracker found installed; a missing one shows as Not installed.
+  const latestSampleMs = getTelemetryTimestampMs(latestTelemetry);
+  const installedApps =
+    latestSampleMs !== null && currentTimeMs - latestSampleMs <= DEVICE_LIVE_MS
+      ? getInstalledApps(latestTelemetry)
+      : null;
+
   const usageByApp = (() => {
     if (!config) return [];
 
@@ -2095,6 +2211,7 @@ function computeDeviceUsage({
         ? new Date(telemetryLastResetForAppMs).toISOString()
         : getLastSeenAt(config, telemetryHistory, appName);
       const hasAgentExtension = appHasAgentExtension(config, appName);
+      const notInstalled = installedApps?.[String(appName).toLowerCase()] === false;
       const policyUsageCounters = usageCounters;
       const reclaimDecision = getReclaimDecision({
         policy: reclaimPolicy,
@@ -2115,10 +2232,10 @@ function computeDeviceUsage({
         ...appIdentity,
         pcName: currentPcName,
         icon: getAppIcon(appIdentity.displayName),
-        status: reclaimDecision.status,
+        status: notInstalled ? 'Not installed' : reclaimDecision.status,
         appType,
         hasAgentExtension,
-        reclaimReason: reclaimDecision.reason,
+        reclaimReason: notInstalled ? 'The Tracker did not find this app on the PC' : reclaimDecision.reason,
         firstSeenAt,
         lastSeenAt,
         reclaimPolicy,
@@ -2131,7 +2248,7 @@ function computeDeviceUsage({
           reclaimPolicy
         ),
         monthlyCost,
-        savingsOpportunity: reclaimDecision.savingsEligible ? monthlyCost : 0,
+        savingsOpportunity: !notInstalled && reclaimDecision.savingsEligible ? monthlyCost : 0,
       };
     });
   })();
@@ -2148,6 +2265,7 @@ function computeDeviceUsage({
     evaluationWindow,
     accumulatedUsage,
     usageByApp,
+    newDecisions,
   };
 }
 
@@ -2616,122 +2734,31 @@ export default function App({ user = null, onSignOut = null }) {
     accumulatedUsage,
     usageByApp,
   } = focusUsage;
-  // License Utilizations lists every registered device, online or not.
-  const allDevicesUsageByApp = useMemo(() => {
+  // Every registered device, online or not: License Utilizations rows and
+  // window decisions.
+  const allDeviceUsages = useMemo(() => {
     const historyByDevice = new Map();
     allTelemetryHistory.forEach((sample) => {
       if (!sample.device_id) return;
       if (!historyByDevice.has(sample.device_id)) historyByDevice.set(sample.device_id, []);
       historyByDevice.get(sample.device_id).push(sample);
     });
-    return deviceOwners.flatMap((device) => {
-      if (device.deviceId === focusDeviceId) return usageByApp;
-      const history = historyByDevice.get(device.deviceId);
-      return history ? computeDeviceUsage({ ...usageInputs, telemetryHistory: history }).usageByApp : [];
-    });
-  }, [allTelemetryHistory, deviceOwners, focusDeviceId, usageByApp, usageInputs]);
+    const others = deviceOwners
+      .filter((device) => device.deviceId !== focusDeviceId && historyByDevice.has(device.deviceId))
+      .map((device) => computeDeviceUsage({ ...usageInputs, telemetryHistory: historyByDevice.get(device.deviceId) }));
+    return [focusUsage, ...others];
+  }, [allTelemetryHistory, deviceOwners, focusDeviceId, focusUsage, usageInputs]);
+  const allDevicesUsageByApp = useMemo(
+    () => allDeviceUsages.flatMap((usage) => usage.usageByApp),
+    [allDeviceUsages]
+  );
 
+  // Persist decisions for windows that closed on any registered device.
   useEffect(() => {
-    const originalStartsAt = evaluationSeriesStartsAt;
-    if (!config || !originalStartsAt || evaluationWindow.startsAt <= originalStartsAt) {
-      return;
-    }
-
-    const completedAt = evaluationWindow.startsAt;
-    const completedStartsAt = completedAt - effectiveEvaluationWindowSeconds * 1000;
-    const countersByName = new Map();
-    let completedSampleCount = 0;
-    telemetryHistory.forEach((payload) => {
-      const timestampMs = getTelemetryTimestampMs(payload);
-      if (
-        timestampMs === null ||
-        timestampMs < completedStartsAt ||
-        timestampMs >= completedAt
-      ) return;
-      completedSampleCount += 1;
-
-      getUsageEntries(payload).forEach((entry) => {
-        const current = countersByName.get(entry.app_name) || createUsageCounters();
-        const next = readUsageCounters(entry);
-        Object.keys(current).forEach((key) => {
-          if (typeof current[key] === 'number') current[key] += Number(next[key]) || 0;
-        });
-        countersByName.set(entry.app_name, current);
-      });
-    });
-
-    if (completedSampleCount === 0) return;
-
-    const nextDecisions = {};
-    const addDecision = (name, type, policy, workedRuntimeSeconds, consumedTokens = 0) => {
-      const key = getEvaluationDecisionKey(
-        currentPcName,
-        type,
-        name,
-        originalStartsAt
-      );
-      const existing = completedEvaluationDecisions[key];
-      if (existing?.completedAt >= completedAt) return;
-      nextDecisions[key] = {
-        ...getReclaimDecision({
-          policy,
-          workedRuntimeSeconds,
-          consumedTokens,
-          evaluationComplete: true,
-        }),
-        completedAt,
-      };
-    };
-
-    (config.licensed_apps || []).forEach((appName) => {
-      const counters = countersByName.get(appName) || createUsageCounters();
-      const type = getAppType(config, appName);
-      const policy = getStoredReclaimPolicy(
-        deploymentPolicyRecords,
-        currentPcName,
-        appName,
-        getAppPolicy(config, appName),
-        { type }
-      );
-      addDecision(appName, type, policy, counters.workedRuntimeSeconds);
-    });
-
-    getUniqueExtensionRules(config.extensions || []).forEach((extension) => {
-      const counters = countersByName.get(extension.name) || createUsageCounters();
-      const policy = getStoredReclaimPolicy(
-        deploymentPolicyRecords,
-        currentPcName,
-        extension.name,
-        extension.reclaimPolicy || DEFAULT_RECLAIM_POLICY,
-        { type: extension.type, parentApp: extension.parentApps }
-      );
-      addDecision(
-        extension.name,
-        extension.type,
-        policy,
-        extension.type === 'agent'
-          ? counters.automationWorkedSeconds
-          : counters.workedRuntimeSeconds,
-        counters.consumedTokens
-      );
-    });
-
+    const nextDecisions = Object.assign({}, ...allDeviceUsages.map((usage) => usage.newDecisions));
     if (Object.keys(nextDecisions).length === 0) return;
-    setCompletedEvaluationDecisions((current) => {
-      const updated = { ...current, ...nextDecisions };
-      return updated;
-    });
-  }, [
-    completedEvaluationDecisions,
-    config,
-    currentPcName,
-    deploymentPolicyRecords,
-    effectiveEvaluationWindow.seconds,
-    effectiveEvaluationWindowSeconds,
-    evaluationSeriesStartsAt,
-    evaluationWindow.startsAt,
-    telemetryHistory,
-  ]);
+    setCompletedEvaluationDecisions((current) => ({ ...current, ...nextDecisions }));
+  }, [allDeviceUsages]);
 
 
   const usageByUrl = useMemo(() => {
