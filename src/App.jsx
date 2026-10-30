@@ -13,6 +13,7 @@ import AppInventoryIcon from './components/AppInventoryIcon';
 import InventoryAppPicker from './components/InventoryAppPicker';
 import SettingsModal from './components/SettingsModal';
 import RuntimeBreakdown from './components/RuntimeBreakdown';
+import LicenseScopePicker from './components/LicenseScopePicker';
 import {
   getPortalClientId,
 } from './utils/clientPreferences';
@@ -2010,6 +2011,11 @@ function groupStatus(surfaces) {
 
 const SURFACE_ORDER = { 'Desktop app': 0, Extension: 1, 'Web app': 2 };
 
+function isAiLicenseGroup(group) {
+  if (productSurfaces(group.productId).some((entry) => String(entry.category).startsWith('AI'))) return true;
+  return group.surfaces.some((surface) => surface.surface === 'Extension' && surface.type === 'agent' && !surface.host);
+}
+
 function catalogSurfaceLabel(entry) {
   if (entry.appType === 'Extension') return 'Extension';
   if (entry.appType === 'Web URL') return 'Web app';
@@ -3205,9 +3211,18 @@ export default function App({ user = null, onSignOut = null }) {
     () => allDeviceUsages.flatMap((usage) => usage.usageByApp),
     [allDeviceUsages]
   );
-  const licenseGroups = useMemo(
+  const allLicenseGroups = useMemo(
     () => buildLicenseGroups(allDeviceUsages, deploymentPolicyRecords),
     [allDeviceUsages, deploymentPolicyRecords]
+  );
+  // End User Licenses shows all of them, apps only, or AI tools and agents only.
+  const [licenseScope, setLicenseScope] = useState('all');
+  const licenseGroups = useMemo(
+    () =>
+      licenseScope === 'all'
+        ? allLicenseGroups
+        : allLicenseGroups.filter((group) => isAiLicenseGroup(group) === (licenseScope === 'ai')),
+    [allLicenseGroups, licenseScope]
   );
   const [collapsedLicenseGroups, setCollapsedLicenseGroups] = useState(() => new Set());
   const toggleLicenseGroup = (groupId) =>
@@ -3217,15 +3232,17 @@ export default function App({ user = null, onSignOut = null }) {
       else next.add(groupId);
       return next;
     });
-  const licenseSummary = useMemo(
-    () => ({
+  const licenseSummary = useMemo(() => {
+    const reclaimable = licenseGroups.filter((group) => group.status === 'Reclaimable');
+    return {
       monthlyCost: licenseGroups.reduce((sum, group) => sum + group.monthlyCost, 0),
       savings: licenseGroups.reduce((sum, group) => sum + group.savingsOpportunity, 0),
       total: licenseGroups.length,
       active: licenseGroups.filter((group) => group.status === 'Active').length,
-    }),
-    [licenseGroups]
-  );
+      reclaimable: reclaimable.length,
+      reclaimableAi: reclaimable.filter(isAiLicenseGroup).length,
+    };
+  }, [licenseGroups]);
 
   // Persist decisions for windows that closed on any registered device.
   useEffect(() => {
@@ -5017,6 +5034,201 @@ export default function App({ user = null, onSignOut = null }) {
     return () => window.clearInterval(intervalId);
   }, []);
 
+  const licenseTableSection = (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>{licenseScope === 'ai' ? 'AI Tools & Agents on PCs' : licenseScope === 'apps' ? 'End User App Licenses' : 'Licenses'}</h2>
+          <p>
+            One row per license on each PC, with its desktop app, extension and
+            web use underneath; the Tracker finds extension and web use on its own.
+            License decisions count all of them and are finalized at the end of
+            each evaluation window.
+          </p>
+          <div className="tracking-window-meta">
+            <span>
+              Evaluation window: {formatDateTime(evaluationWindow.startsAt)} to{' '}
+              {formatDateTime(evaluationWindow.endsAt)}
+            </span>
+            <span>{evaluationWindow.sampleCount} telemetry samples</span>
+          </div>
+        </div>
+        <div className="panel-actions">
+          {latestTelemetry?.timestamp && (
+            <span className="last-updated">
+              Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="extension-summary-grid" aria-label="License summary">
+        <div>
+          <span>Overall monthly cost</span>
+          <strong>{formatCurrency(licenseSummary.monthlyCost)}</strong>
+        </div>
+        <div>
+          <span>Identified Monthly Savings</span>
+          <strong>{formatCurrency(licenseSummary.savings)}</strong>
+        </div>
+        <div>
+          <span>Licenses</span>
+          <strong>{licenseSummary.total}</strong>
+          <small>{licenseSummary.active} Actively Working</small>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table className="license-group-table">
+          <thead>
+            <tr>
+              <th>
+                <button type="button" onClick={() => requestSort('pcName')}>
+                  PC Name{renderSortIndicator('pcName')}
+                </button>
+              </th>
+              <th>
+                <button type="button" onClick={() => requestSort('appName')}>
+                  License{renderSortIndicator('appName')}
+                </button>
+              </th>
+              <th>
+                <button type="button" onClick={() => requestSort('status')}>
+                  Status{renderSortIndicator('status')}
+                </button>
+              </th>
+              <th>
+                <button type="button" onClick={() => requestSort('totalRuntimeSeconds')}>
+                  Tracked Runtime{renderSortIndicator('totalRuntimeSeconds')}
+                </button>
+              </th>
+              <th>
+                <button type="button" onClick={() => requestSort('monthlyCost')}>
+                  Cost Impact{renderSortIndicator('monthlyCost')}
+                </button>
+              </th>
+              <th>
+                <button type="button" onClick={() => requestSort('savingsOpportunity')}>
+                  Savings Opportunity{renderSortIndicator('savingsOpportunity')}
+                </button>
+              </th>
+              <th>Explore</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedLicenseGroups.map((group) => {
+              const isCollapsed = collapsedLicenseGroups.has(group.id);
+              return (
+                <Fragment key={group.id}>
+                  <tr className="license-group-row">
+                    <td>
+                      <span className="pc-name-chip">{group.pcName}</span>
+                    </td>
+                    <td>
+                      <div className="app-identity">
+                        <button
+                          className="license-toggle"
+                          type="button"
+                          aria-expanded={!isCollapsed}
+                          aria-label={`${isCollapsed ? 'Show' : 'Hide'} ${group.name} usage`}
+                          onClick={() => toggleLicenseGroup(group.id)}
+                        >
+                          {isCollapsed ? '▸' : '▾'}
+                        </button>
+                        <span className="app-icon">{group.icon}</span>
+                        <span className="app-name-stack">
+                          <strong>{group.name}</strong>
+                          <small>
+                            {trackedSurfaceCount(group)} tracked{' '}
+                            {trackedSurfaceCount(group) === 1 ? 'surface' : 'surfaces'}
+                          </small>
+                          {group.hostsExtensions.length > 0 && (
+                            <small className="license-hosts">
+                              Runs extensions:{' '}
+                              {group.hostsExtensions.map((host) => host.name).join(', ')}
+                            </small>
+                          )}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span
+                        className={`status-badge ${getStatusBadgeClass(group.status)}`}
+                        title={group.reclaimReason}
+                      >
+                        {group.status}
+                      </span>
+                    </td>
+                    <td><RuntimeBreakdown entry={group} /></td>
+                    <td className="cost-impact-value">-{formatCurrency(group.monthlyCost)}</td>
+                    <td className={group.savingsOpportunity > 0 ? 'savings-value' : 'muted-value'}>
+                      {group.savingsOpportunity > 0
+                        ? `+${formatCurrency(group.savingsOpportunity)}`
+                        : formatCurrency(0)}
+                    </td>
+                    <td>
+                      <button
+                        className="explore-button"
+                        type="button"
+                        onClick={() => handleExploreDashboardAgent(group.pcName)}
+                      >
+                        <span className="action-symbol">›</span>
+                        Explore
+                      </button>
+                    </td>
+                  </tr>
+                  {!isCollapsed &&
+                    group.surfaces.map((surface) => (
+                      <tr
+                        className="license-surface-row"
+                        key={`${group.id}|${surface.surface}|${surface.detail}`}
+                      >
+                        <td />
+                        <td>
+                          <span className="app-name-stack license-surface-name">
+                            <strong>{surface.surface}</strong>
+                            <small>{surface.detail}</small>
+                          </span>
+                        </td>
+                        <td>
+                          {surface.notTracked ? (
+                            <span className="muted-value">Not detected yet</span>
+                          ) : surface.status === 'Not installed' ? (
+                            <span className={`status-badge ${getStatusBadgeClass(surface.status)}`}>
+                              {surface.status}
+                            </span>
+                          ) : (
+                            <span className="muted-value">
+                              {surface.lastSeenAt
+                                ? `Last used ${formatDateTime(surface.lastSeenAt)}`
+                                : 'Not detected yet'}
+                            </span>
+                          )}
+                        </td>
+                        <td><RuntimeBreakdown entry={surface} /></td>
+                        <td />
+                        <td />
+                        <td />
+                      </tr>
+                    ))}
+                </Fragment>
+              );
+            })}
+            {sortedLicenseGroups.length === 0 && (
+              <tr>
+                <td colSpan="7" className="empty-state">
+                  {licenseScope === 'ai'
+                    ? 'No AI tool or agent licenses deployed to a PC yet.'
+                    : 'Waiting for licensed app configuration.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   return (
     <div className="app-shell">
       <AppNavigation
@@ -5627,225 +5839,41 @@ export default function App({ user = null, onSignOut = null }) {
           <>
           <LicenseCategoryTabs value={licenseCategory} onChange={setLicenseCategory} />
           {licenseCategory === 'platform' && <PlatformLicenses />}
-          {licenseCategory === 'ai' && <AiToolLicenses />}
           {licenseCategory === 'end-user' && (
+          <>
+          <LicenseScopePicker value={licenseScope} onChange={setLicenseScope} />
+          {licenseScope === 'ai' ? (
+            <AiToolLicenses>{licenseTableSection}</AiToolLicenses>
+          ) : (
           <>
           <section className="summary-grid" aria-label="Executive summary">
             <article className="summary-card">
               <span>Total Monthly Software Spend</span>
-              <strong>{formatCurrency(aggregates.totalMonthlySoftwareSpend)}</strong>
-              <small>App license cost + AI license cost</small>
+              <strong>{formatCurrency(licenseSummary.monthlyCost)}</strong>
+              <small>{licenseScope === 'apps' ? 'App license cost' : 'App license cost + AI license cost'}</small>
             </article>
             <article className="summary-card summary-card-alert">
               <span>Identified Monthly Savings</span>
-              <strong>{formatCurrency(aggregates.totalMonthlySavings)}</strong>
-              <small>Reclaimable app cost + AI license cost</small>
+              <strong>{formatCurrency(licenseSummary.savings)}</strong>
+              <small>{licenseScope === 'apps' ? 'Reclaimable app cost' : 'Reclaimable app cost + AI license cost'}</small>
             </article>
             <article className="summary-card">
               <span>Reclaimable Licenses</span>
               <strong>
-                {aggregates.totalReclaimableLicenses}{' '}
+                {licenseSummary.reclaimable}{' '}
                 <small className="inline-strong-note">
-                  from {aggregates.totalLicenses} total licenses
+                  from {licenseSummary.total} total licenses
                 </small>
               </strong>
               <small>
-                {aggregates.reclaimableSeats} App Licenses +{' '}
-                {aggregates.reclaimableAgentExtensions} AI Licenses
+                {licenseScope === 'apps'
+                  ? `${licenseSummary.reclaimable} App Licenses`
+                  : `${licenseSummary.reclaimable - licenseSummary.reclaimableAi} App Licenses + ${licenseSummary.reclaimableAi} AI Licenses`}
               </small>
             </article>
           </section>
 
-          <section className="panel">
-            <div className="panel-header">
-              <div>
-                <h2>Licenses</h2>
-                <p>
-                  One row per license on each PC, with its desktop app, extension and
-                  web use underneath; the Tracker finds extension and web use on its own.
-                  License decisions count all of them and are finalized at the end of
-                  each evaluation window.
-                </p>
-                <div className="tracking-window-meta">
-                  <span>
-                    Evaluation window: {formatDateTime(evaluationWindow.startsAt)} to{' '}
-                    {formatDateTime(evaluationWindow.endsAt)}
-                  </span>
-                  <span>{evaluationWindow.sampleCount} telemetry samples</span>
-                </div>
-              </div>
-              <div className="panel-actions">
-                {latestTelemetry?.timestamp && (
-                  <span className="last-updated">
-                    Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="extension-summary-grid" aria-label="License summary">
-              <div>
-                <span>Overall monthly cost</span>
-                <strong>{formatCurrency(licenseSummary.monthlyCost)}</strong>
-              </div>
-              <div>
-                <span>Identified Monthly Savings</span>
-                <strong>{formatCurrency(licenseSummary.savings)}</strong>
-              </div>
-              <div>
-                <span>Licenses</span>
-                <strong>{licenseSummary.total}</strong>
-                <small>{licenseSummary.active} Actively Working</small>
-              </div>
-            </div>
-
-            <div className="table-wrap">
-              <table className="license-group-table">
-                <thead>
-                  <tr>
-                    <th>
-                      <button type="button" onClick={() => requestSort('pcName')}>
-                        PC Name{renderSortIndicator('pcName')}
-                      </button>
-                    </th>
-                    <th>
-                      <button type="button" onClick={() => requestSort('appName')}>
-                        License{renderSortIndicator('appName')}
-                      </button>
-                    </th>
-                    <th>
-                      <button type="button" onClick={() => requestSort('status')}>
-                        Status{renderSortIndicator('status')}
-                      </button>
-                    </th>
-                    <th>
-                      <button type="button" onClick={() => requestSort('totalRuntimeSeconds')}>
-                        Tracked Runtime{renderSortIndicator('totalRuntimeSeconds')}
-                      </button>
-                    </th>
-                    <th>
-                      <button type="button" onClick={() => requestSort('monthlyCost')}>
-                        Cost Impact{renderSortIndicator('monthlyCost')}
-                      </button>
-                    </th>
-                    <th>
-                      <button type="button" onClick={() => requestSort('savingsOpportunity')}>
-                        Savings Opportunity{renderSortIndicator('savingsOpportunity')}
-                      </button>
-                    </th>
-                    <th>Explore</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedLicenseGroups.map((group) => {
-                    const isCollapsed = collapsedLicenseGroups.has(group.id);
-                    return (
-                      <Fragment key={group.id}>
-                        <tr className="license-group-row">
-                          <td>
-                            <span className="pc-name-chip">{group.pcName}</span>
-                          </td>
-                          <td>
-                            <div className="app-identity">
-                              <button
-                                className="license-toggle"
-                                type="button"
-                                aria-expanded={!isCollapsed}
-                                aria-label={`${isCollapsed ? 'Show' : 'Hide'} ${group.name} usage`}
-                                onClick={() => toggleLicenseGroup(group.id)}
-                              >
-                                {isCollapsed ? '▸' : '▾'}
-                              </button>
-                              <span className="app-icon">{group.icon}</span>
-                              <span className="app-name-stack">
-                                <strong>{group.name}</strong>
-                                <small>
-                                  {trackedSurfaceCount(group)} tracked{' '}
-                                  {trackedSurfaceCount(group) === 1 ? 'surface' : 'surfaces'}
-                                </small>
-                                {group.hostsExtensions.length > 0 && (
-                                  <small className="license-hosts">
-                                    Runs extensions:{' '}
-                                    {group.hostsExtensions.map((host) => host.name).join(', ')}
-                                  </small>
-                                )}
-                              </span>
-                            </div>
-                          </td>
-                          <td>
-                            <span
-                              className={`status-badge ${getStatusBadgeClass(group.status)}`}
-                              title={group.reclaimReason}
-                            >
-                              {group.status}
-                            </span>
-                          </td>
-                          <td><RuntimeBreakdown entry={group} /></td>
-                          <td className="cost-impact-value">-{formatCurrency(group.monthlyCost)}</td>
-                          <td className={group.savingsOpportunity > 0 ? 'savings-value' : 'muted-value'}>
-                            {group.savingsOpportunity > 0
-                              ? `+${formatCurrency(group.savingsOpportunity)}`
-                              : formatCurrency(0)}
-                          </td>
-                          <td>
-                            <button
-                              className="explore-button"
-                              type="button"
-                              onClick={() => handleExploreDashboardAgent(group.pcName)}
-                            >
-                              <span className="action-symbol">›</span>
-                              Explore
-                            </button>
-                          </td>
-                        </tr>
-                        {!isCollapsed &&
-                          group.surfaces.map((surface) => (
-                            <tr
-                              className="license-surface-row"
-                              key={`${group.id}|${surface.surface}|${surface.detail}`}
-                            >
-                              <td />
-                              <td>
-                                <span className="app-name-stack license-surface-name">
-                                  <strong>{surface.surface}</strong>
-                                  <small>{surface.detail}</small>
-                                </span>
-                              </td>
-                              <td>
-                                {surface.notTracked ? (
-                                  <span className="muted-value">Not detected yet</span>
-                                ) : surface.status === 'Not installed' ? (
-                                  <span className={`status-badge ${getStatusBadgeClass(surface.status)}`}>
-                                    {surface.status}
-                                  </span>
-                                ) : (
-                                  <span className="muted-value">
-                                    {surface.lastSeenAt
-                                      ? `Last used ${formatDateTime(surface.lastSeenAt)}`
-                                      : 'Not detected yet'}
-                                  </span>
-                                )}
-                              </td>
-                              <td><RuntimeBreakdown entry={surface} /></td>
-                              <td />
-                              <td />
-                              <td />
-                            </tr>
-                          ))}
-                      </Fragment>
-                    );
-                  })}
-                  {sortedLicenseGroups.length === 0 && (
-                    <tr>
-                      <td colSpan="7" className="empty-state">
-                        Waiting for licensed app configuration.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          {licenseTableSection}
 
           <section className="panel compact-panel trends-panel">
             <div className="panel-header">
@@ -6007,6 +6035,8 @@ export default function App({ user = null, onSignOut = null }) {
               </article>
             </div>
           </section>
+          </>
+          )}
           </>
           )}
           </>

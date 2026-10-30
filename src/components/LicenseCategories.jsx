@@ -6,7 +6,6 @@ const BACKEND_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 export const LICENSE_CATEGORIES = [
   { id: 'end-user', label: 'End User Licenses' },
   { id: 'platform', label: 'Enterprise Platform Licenses' },
-  { id: 'ai', label: 'AI Tools & Agent Licenses' },
 ];
 
 const usd = (value, digits = 2) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: digits, minimumFractionDigits: digits }).format(Number(value) || 0);
@@ -172,10 +171,12 @@ export function PlatformLicenses() {
 
 const sum = (items, pick) => items.reduce((total, item) => total + (Number(pick(item)) || 0), 0);
 
-export function AiToolLicenses() {
+// AI licenses under End User Licenses: vendor seats and spend, then the
+// license table (children) for AI tools and agents tracked on PCs.
+export function AiToolLicenses({ children }) {
   const { data, error } = useJson('/api/ai-tools/overview');
-  if (error) return <p className="error-message">{error}</p>;
-  if (!data) return <p className="muted-value">Loading AI tool licenses…</p>;
+  if (error) return <><p className="error-message">{error}</p>{children}</>;
+  if (!data) return <><p className="muted-value">Loading AI tool licenses…</p>{children}</>;
   const tools = data.vendors.map((vendor) => {
     const members = vendor.members || [];
     const seatsKpi = vendor.kpis?.find((kpi) => kpi.label === 'Seats');
@@ -269,33 +270,7 @@ export function AiToolLicenses() {
         </div>
       </section>
 
-      {idleSeats.length > 0 && (
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <h2>Seats to reclaim</h2>
-              <p>AI tool seats with no activity in each vendor's review window.</p>
-            </div>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>User</th><th>AI tool</th><th>Status</th><th>Last active</th></tr>
-              </thead>
-              <tbody>
-                {idleSeats.map((member) => (
-                  <tr key={`${member.tool}-${member.id || member.email}`}>
-                    <td><strong>{member.name}</strong>{member.email && <small> {member.email}</small>}</td>
-                    <td>{member.tool}</td>
-                    <td><span className="status-badge status-reclaimable">{member.status === 'never' ? 'No activity' : 'Idle'}</span></td>
-                    <td>{member.lastActiveAt ? new Date(member.lastActiveAt).toLocaleDateString() : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      {children}
     </>
   );
 }

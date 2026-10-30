@@ -5650,3 +5650,135 @@ label.platform-contract-check {
   font-size: 12px;
   color: #64748b;
 }
+
+/* End User Licenses scope: All / apps / AI licenses. */
+.license-scope {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 16px;
+}
+
+.license-scope-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.license-scope-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 230px;
+  justify-content: space-between;
+  padding: 9px 14px;
+  border: 1px solid #d5dfeb;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.license-scope-button:hover,
+.license-scope-button.open {
+  border-color: #1a7fc4;
+  box-shadow: 0 0 0 3px rgba(26, 127, 196, 0.14);
+}
+
+.license-scope-button:focus-visible {
+  outline: 2px solid #1a7fc4;
+  outline-offset: 2px;
+}
+
+.license-scope-chevron {
+  width: 16px;
+  height: 16px;
+  color: #64748b;
+  transition: transform 0.18s ease;
+}
+
+.license-scope-button.open .license-scope-chevron {
+  transform: rotate(180deg);
+}
+
+.license-scope-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 72px;
+  z-index: 30;
+  width: 320px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+  animation: license-scope-in 0.14s ease-out;
+}
+
+@keyframes license-scope-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.license-scope-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.license-scope-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.license-scope-option strong {
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.license-scope-option small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.license-scope-option.active {
+  background: #f1f6fb;
+}
+
+.license-scope-option.selected strong {
+  color: #15669e;
+}
+
+.license-scope-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: #15669e;
+}
+
+@media (max-width: 600px) {
+  .license-scope-button {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .license-scope-menu {
+    left: 0;
+    width: 100%;
+  }
+}
