@@ -35,6 +35,7 @@ import {
 import appCostData from './app_costs.json';
 import appConfig from './app_config.json';
 import { deriveTrackerConfig } from './utils/trackerConfig';
+import { PRODUCTS, findCatalogSurface, inventoryMatch, productSurfaces } from './data/appCatalog';
 import {
   buildPortalReclaimPolicy,
   buildReclaimPolicy,
@@ -94,6 +95,16 @@ function getExtensionDetectionDefaults(extensionName) {
       model_signatures: [],
       identifiers: [],
       match_all: ['--extensionprocess', 'github.copilot'],
+    };
+  }
+  if (normalizedName === 'claude-code') {
+    // The VS Code extension runs the Claude Code binary from its own folder.
+    return {
+      canonical_name: 'claude-code',
+      dummy_model: '',
+      model_signatures: [],
+      identifiers: [],
+      match_all: ['anthropic.claude-code'],
     };
   }
   if (normalizedName === 'codex') {
@@ -2002,9 +2013,13 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
       if (!pcGroups.has(key)) {
         pcGroups.set(key, { id: `${pcName}|${key}`, pcName, name, icon, surfaces: [], hostsExtensions: [] });
       }
-      pcGroups.get(key).surfaces.push(surface);
-      return pcGroups.get(key);
+      const group = pcGroups.get(key);
+      if (surface.productId) group.productId = surface.productId;
+      group.surfaces.push(surface);
+      return group;
     };
+    // A recognised surface names its product, which is the license it belongs to.
+    const productKey = (catalog) => (catalog?.product ? licenseKey(PRODUCTS[catalog.product] || catalog.product) : null);
     const findGroup = (candidates) => {
       for (const candidate of candidates.map(licenseKey).filter(Boolean)) {
         if (pcGroups.has(candidate)) return candidate;
@@ -2015,22 +2030,28 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
     };
 
     usage.usageByApp.forEach((entry) => {
-      const name = subscriptionFor(pcName, entry.appName) || entry.displayName;
-      addSurface(licenseKey(name), name, entry.icon, {
+      const catalog = findCatalogSurface({ appType: 'Application', processName: entry.appName });
+      const name = (catalog && PRODUCTS[catalog.product]) || subscriptionFor(pcName, entry.appName) || entry.displayName;
+      addSurface(productKey(catalog) || licenseKey(name), name, entry.icon, {
         ...entry,
         surface: 'Desktop app',
         detail: entry.rawName || entry.appName,
+        catalogId: catalog?.id,
+        productId: catalog?.product,
       });
     });
 
     usage.usageByExtension.forEach((extension) => {
+      const catalog = findCatalogSurface({ appType: 'Extension', processName: extension.name, appName: extension.name });
       const candidates = [...(extension.subscriptionTypes || []), extension.name];
-      const key = findGroup(candidates) || licenseKey(candidates[0]);
+      const key = productKey(catalog) || findGroup(candidates) || licenseKey(candidates[0]);
       const hosts = extension.parentApps.map((parent) => getReadableAppIdentity(parent).displayName);
-      addSurface(key, candidates[0], extension.icon, {
+      addSurface(key, (catalog && PRODUCTS[catalog.product]) || candidates[0], extension.icon, {
         ...extension,
         surface: hosts.length > 0 ? `Extension in ${hosts.join(', ')}` : 'Extension',
         detail: extension.name,
+        catalogId: catalog?.id,
+        productId: catalog?.product,
       });
     });
 
@@ -2039,20 +2060,58 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
     usage.usageByUrl.forEach((url) => {
       const address = licenseKey(url.url);
       const host = webAddressHost(url.url);
-      const key = [...pcGroups.keys()].find(
-        (candidate) =>
-          candidate &&
-          (address.includes(candidate) || (host && webAddressHost(KNOWN_WEB_APPS[candidate]) === host))
-      );
+      const catalog = findCatalogSurface({ appType: 'Web URL', url: url.url });
+      const key =
+        (pcGroups.has(productKey(catalog)) && productKey(catalog)) ||
+        [...pcGroups.keys()].find(
+          (candidate) =>
+            candidate &&
+            (address.includes(candidate) || (host && webAddressHost(KNOWN_WEB_APPS[candidate]) === host))
+        );
       if (!key) return;
       pcGroups.get(key).surfaces.push({
         ...url,
+        catalogId: catalog?.id,
         surface: 'Web app',
         detail: url.url,
         status: '',
         monthlyCost: 0,
         totalRuntimeSeconds: url.trackedRuntimeSeconds,
       });
+    });
+
+    // A recognised product lists all its surfaces; one not deployed or tracked says so.
+    pcGroups.forEach((group) => {
+      const present = new Set(group.surfaces.map((surface) => surface.catalogId).filter(Boolean));
+      productSurfaces(group.productId)
+        .filter((entry) => !present.has(entry.id))
+        .forEach((entry) => {
+          const surface =
+            entry.appType === 'Extension'
+              ? `Extension in ${entry.parentApp}`
+              : entry.appType === 'Web URL'
+                ? 'Web app'
+                : 'Desktop app';
+          group.surfaces.push({
+            surface,
+            detail:
+              entry.appType === 'Web URL'
+                ? `https://${entry.url}`
+                : entry.appType === 'Extension'
+                  ? entry.appName
+                  : entry.processName || entry.appName,
+            catalogId: entry.id,
+            status: '',
+            notTracked: true,
+            monthlyCost: 0,
+            totalRuntimeSeconds: 0,
+            workedRuntimeSeconds: 0,
+            automationWorkedSeconds: 0,
+            idleRuntimeSeconds: 0,
+          });
+        });
+      const order = { 'Desktop app': 0, 'Web app': 2 };
+      group.surfaces.sort((first, second) => (order[first.surface] ?? 1) - (order[second.surface] ?? 1));
     });
 
     // Every license shows its web line; one the Trackers do not watch yet says so.
@@ -2792,6 +2851,8 @@ export default function App({ user = null, onSignOut = null }) {
   );
   const [editingOnboardedLicenseId, setEditingOnboardedLicenseId] = useState('');
   const [licenseAppForm, setLicenseAppForm] = useState(DEFAULT_LICENSE_APP_FORM);
+  const [pickedCatalogEntry, setPickedCatalogEntry] = useState(null);
+  const [skippedCompanionIds, setSkippedCompanionIds] = useState(() => new Set());
   const [editingInventoryAppId, setEditingInventoryAppId] = useState('');
   const [licenseOnboardingStatus, setLicenseOnboardingStatus] = useState('');
   const [isAppCatalogOpen, setIsAppCatalogOpen] = useState(false);
@@ -3741,6 +3802,22 @@ export default function App({ user = null, onSignOut = null }) {
         .map((app) => app.appName),
     [licensedApps]
   );
+  // The picked app's other surfaces (desktop app, extension, web) not yet in
+  // the inventory; an extension needs its parent app there, or added now.
+  const companionSurfaces = useMemo(() => {
+    const entry = pickedCatalogEntry;
+    if (!entry?.product || editingInventoryAppId) return [];
+    if (entry.appType !== licenseAppForm.appType || entry.appName !== licenseAppForm.appName) return [];
+    return productSurfaces(entry.product)
+      .filter((surface) => surface.id !== entry.id && !inventoryMatch(surface, licensedApps))
+      .map((surface) => ({
+        ...surface,
+        parentReady:
+          surface.appType !== 'Extension' ||
+          enterpriseParentAppOptions.includes(surface.parentApp) ||
+          (entry.appType === 'Application' && entry.appName === surface.parentApp),
+      }));
+  }, [editingInventoryAppId, enterpriseParentAppOptions, licenseAppForm.appName, licenseAppForm.appType, licensedApps, pickedCatalogEntry]);
 
   const cloudRegionOptions = useMemo(
     () => Array.from(new Set(cloudInventory.map((resource) => resource.region))).sort(),
@@ -4472,10 +4549,10 @@ export default function App({ user = null, onSignOut = null }) {
       return;
     }
 
+    const inventoryId = (type, name) => `${type}-${name}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const productName = companionSurfaces.length > 0 ? PRODUCTS[pickedCatalogEntry.product] : '';
     const nextApp = {
-      id: `${appType}-${appType === 'Web URL' ? url : appName}`
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-'),
+      id: inventoryId(appType, appType === 'Web URL' ? url : appName),
       appName: appType === 'Web URL' ? url : appName,
       processName,
       url,
@@ -4484,9 +4561,26 @@ export default function App({ user = null, onSignOut = null }) {
       ownerEmail,
       appType,
       parentApp,
-      subscriptionType,
+      subscriptionType: subscriptionType || productName,
       onboardedAt: new Date().toISOString(),
     };
+    // Other surfaces of the same license: the cost stays on the main item.
+    const companionItems = companionSurfaces
+      .filter((surface) => surface.parentReady && !skippedCompanionIds.has(surface.id))
+      .map((surface) => ({
+        id: inventoryId(surface.appType, surface.appType === 'Web URL' ? surface.url : surface.appName),
+        appName: surface.appType === 'Web URL' ? surface.url : surface.appName,
+        processName: surface.processName || '',
+        url: surface.url || '',
+        monthlyCost: 0,
+        owner,
+        ownerEmail,
+        appType: surface.appType,
+        parentApp: surface.parentApp || '',
+        subscriptionType: productName,
+        bundledWith: nextApp.id,
+        onboardedAt: nextApp.onboardedAt,
+      }));
 
     if (
       editingInventoryAppId &&
@@ -4502,13 +4596,12 @@ export default function App({ user = null, onSignOut = null }) {
         (app) => app.id === (editingInventoryAppId || nextApp.id)
       );
 
-      if (existingIndex === -1) {
-        return [...currentApps, nextApp];
-      }
-
-      return currentApps.map((app, index) =>
-        index === existingIndex ? { ...app, ...nextApp } : app
-      );
+      const merged =
+        existingIndex === -1
+          ? [...currentApps, nextApp]
+          : currentApps.map((app, index) => (index === existingIndex ? { ...app, ...nextApp } : app));
+      const known = new Set(merged.map((app) => app.id));
+      return [...merged, ...companionItems.filter((item) => !known.has(item.id))];
     });
     setOnboardedAppLicenses((currentLicenses) =>
       currentLicenses.map((app) =>
@@ -4520,9 +4613,15 @@ export default function App({ user = null, onSignOut = null }) {
     setLicenseOnboardingStatus(
       `${appName} ${appType.toLowerCase()} ${
         editingInventoryAppId ? 'updated in' : 'added to'
-      } Enterprise Apps Inventory.`
+      } Enterprise Apps Inventory${
+        companionItems.length > 0
+          ? `, with ${companionItems.map((item) => item.appName).join(' and ')}`
+          : ''
+      }.`
     );
     setLicenseAppForm(DEFAULT_LICENSE_APP_FORM);
+    setPickedCatalogEntry(null);
+    setSkippedCompanionIds(new Set());
     setEditingInventoryAppId('');
   };
 
@@ -4547,24 +4646,32 @@ export default function App({ user = null, onSignOut = null }) {
       policy: selectedPolicy,
       onboardedAt: new Date().toISOString(),
     };
+    // Surfaces added with this item (an extension in another app) share its
+    // policy; web items deploy from the inventory directly.
+    const bundledLicenses = licensedApps
+      .filter((app) => app.bundledWith === inventoryItem.id && app.appType !== 'Web URL')
+      .map((app) => ({ ...app, policy: selectedPolicy, onboardedAt: nextLicense.onboardedAt }));
 
     setOnboardedAppLicenses((currentLicenses) => {
       const existingIndex = currentLicenses.findIndex(
         (app) => app.id === (editingOnboardedLicenseId || inventoryItem.id)
       );
 
-      if (existingIndex === -1) {
-        return [...currentLicenses, nextLicense];
-      }
-
-      return currentLicenses.map((app, index) =>
-        index === existingIndex ? nextLicense : app
-      );
+      const updated =
+        existingIndex === -1
+          ? [...currentLicenses, nextLicense]
+          : currentLicenses.map((app, index) => (index === existingIndex ? nextLicense : app));
+      const bundledIds = new Set(bundledLicenses.map((app) => app.id));
+      return [...updated.filter((app) => !bundledIds.has(app.id)), ...bundledLicenses];
     });
     setLicenseOnboardingStatus(
       `${inventoryItem.appName} license ${
         editingOnboardedLicenseId ? 'updated' : 'onboarded'
-      } with ${selectedPolicy.name} policy.`
+      } with ${selectedPolicy.name} policy${
+        bundledLicenses.length > 0
+          ? `, with ${bundledLicenses.map((app) => app.appName).join(' and ')}`
+          : ''
+      }.`
     );
     setOnboardAppLicenseForm({
       ...DEFAULT_ONBOARD_APP_LICENSE_FORM,
@@ -6666,6 +6773,8 @@ export default function App({ user = null, onSignOut = null }) {
                       appType={licenseAppForm.appType}
                       value={licenseAppForm.appName}
                       onPick={(entry) => {
+                        setPickedCatalogEntry(entry);
+                        setSkippedCompanionIds(new Set());
                         // An extension's parent must already be an Application in the inventory.
                         const parentReady = !entry.parentApp || enterpriseParentAppOptions.includes(entry.parentApp);
                         setLicenseAppForm((currentForm) => ({
@@ -6680,7 +6789,10 @@ export default function App({ user = null, onSignOut = null }) {
                           parentReady ? '' : `${entry.appName} runs inside ${entry.parentApp}: add ${entry.parentApp} to the inventory first, then choose it as Parent App.`
                         );
                       }}
-                      onTypeName={(appName) => setLicenseAppForm((currentForm) => ({ ...currentForm, appName }))}
+                      onTypeName={(appName) => {
+                        setPickedCatalogEntry(null);
+                        setLicenseAppForm((currentForm) => ({ ...currentForm, appName }));
+                      }}
                     />
                   </div>
                   <label>
@@ -6753,6 +6865,44 @@ export default function App({ user = null, onSignOut = null }) {
                     />
                   </label>
                 </>
+              )}
+              {companionSurfaces.length > 0 && (
+                <fieldset className="companion-surfaces">
+                  <legend>Also track {PRODUCTS[pickedCatalogEntry.product]} through</legend>
+                  {companionSurfaces.map((surface) => (
+                    <label className="companion-surface" key={surface.id}>
+                      <input
+                        checked={surface.parentReady && !skippedCompanionIds.has(surface.id)}
+                        disabled={!surface.parentReady}
+                        type="checkbox"
+                        onChange={(event) =>
+                          setSkippedCompanionIds((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.delete(surface.id);
+                            else next.add(surface.id);
+                            return next;
+                          })
+                        }
+                      />
+                      <span>
+                        <strong>
+                          {surface.appType === 'Web URL'
+                            ? `Web app · ${surface.url}`
+                            : surface.appType === 'Extension'
+                              ? `Extension in ${surface.parentApp} · ${surface.appName}`
+                              : `Desktop app · ${surface.processName}`}
+                        </strong>
+                        <small>
+                          {!surface.parentReady
+                            ? `Add ${surface.parentApp} to the inventory first`
+                            : surface.verified
+                              ? 'Detection verified'
+                              : 'Detection not yet verified on a PC'}
+                        </small>
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
               )}
               <button className="deploy-agent-button" type="submit">
                 <span className="action-symbol">+</span>

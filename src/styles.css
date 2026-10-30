@@ -5597,3 +5597,56 @@ label.platform-contract-check {
 .license-group-table .license-surface-row .runtime-breakdown strong {
   font-size: 13px;
 }
+
+/* Inventory form: other surfaces of the picked app, added with it. */
+.companion-surfaces {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed #c9d6e4;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.companion-surfaces legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.companion-surface {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.companion-surface input {
+  margin-top: 3px;
+}
+
+.companion-surface span,
+.companion-surface strong,
+.companion-surface small {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.companion-surface span {
+  display: flex;
+  flex-direction: column;
+}
+
+.companion-surface strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.companion-surface small {
+  font-size: 12px;
+  color: #64748b;
+}
