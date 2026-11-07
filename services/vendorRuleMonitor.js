@@ -17,6 +17,15 @@ import { latestDeployments } from './trackerDeployments.js';
 import { productOfMeasure, vendorField } from './vendorRuleFields.js';
 
 export const REFRESH_MS = 15 * 60 * 1000;
+// Where each product's vendor data comes from, as the portal labels it.
+const SOURCES = {
+  postman: 'Postman audit log',
+  claude: 'Claude Code usage report',
+  codex: 'Codex usage',
+  copilot: 'GitHub Copilot metrics',
+  figma: 'Figma activity log',
+  zoom: 'Zoom users',
+};
 const key = (value) => String(value || '').trim().toLowerCase();
 
 // ---------------------------------------------------------------- per-user facts
@@ -173,6 +182,7 @@ export async function runVendorRuleCheck({ outbox, licenses, results, overview, 
         appName: license.appName,
         processName: license.processName || license.appName,
         policyName: license.policy.name || '',
+        source: SOURCES[productOfMeasure(license.policy.vendorRules[0]?.measure)] || 'Vendor API',
         checks,
         // The seat counts as in use if any vendor field is met.
         inUse: checks.some((check) => check.met),

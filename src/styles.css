@@ -5651,138 +5651,6 @@ label.platform-contract-check {
   color: #64748b;
 }
 
-/* End User Licenses scope: All / apps / AI licenses. */
-.license-scope {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 4px 0 16px;
-}
-
-.license-scope-label {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #64748b;
-}
-
-.license-scope-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 230px;
-  justify-content: space-between;
-  padding: 9px 14px;
-  border: 1px solid #d5dfeb;
-  border-radius: 999px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-  color: #0f172a;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.license-scope-button:hover,
-.license-scope-button.open {
-  border-color: #1a7fc4;
-  box-shadow: 0 0 0 3px rgba(26, 127, 196, 0.14);
-}
-
-.license-scope-button:focus-visible {
-  outline: 2px solid #1a7fc4;
-  outline-offset: 2px;
-}
-
-.license-scope-chevron {
-  width: 16px;
-  height: 16px;
-  color: #64748b;
-  transition: transform 0.18s ease;
-}
-
-.license-scope-button.open .license-scope-chevron {
-  transform: rotate(180deg);
-}
-
-.license-scope-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 72px;
-  z-index: 30;
-  width: 320px;
-  margin: 0;
-  padding: 6px;
-  list-style: none;
-  border: 1px solid #e2e8f0;
-  border-radius: 14px;
-  background: #ffffff;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
-  animation: license-scope-in 0.14s ease-out;
-}
-
-@keyframes license-scope-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.license-scope-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-}
-
-.license-scope-option span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.license-scope-option strong {
-  font-size: 14px;
-  color: #0f172a;
-}
-
-.license-scope-option small {
-  font-size: 12px;
-  color: #64748b;
-}
-
-.license-scope-option.active {
-  background: #f1f6fb;
-}
-
-.license-scope-option.selected strong {
-  color: #15669e;
-}
-
-.license-scope-check {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  color: #15669e;
-}
-
-@media (max-width: 600px) {
-  .license-scope-button {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .license-scope-menu {
-    left: 0;
-    width: 100%;
-  }
-}
-
 /* Inventory: an app's plans and tracker detection. */
 .inventory-app-row {
   cursor: pointer;
@@ -6191,4 +6059,512 @@ label.platform-contract-check {
   font-size: 11.5px;
   line-height: 1.35;
   color: #0f7a4a;
+}
+
+.sample-data-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px dashed #c8d5e4;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #445a74;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sample-row-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fff4d6;
+  color: #8a5a00;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.vendor-check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.vendor-check-list li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.vendor-check-met {
+  color: #0f7a4a;
+}
+
+.vendor-check-missed {
+  color: #8a96a6;
+}
+
+.vendor-check-list strong {
+  color: #10233f;
+  font-weight: 600;
+}
+
+.vendor-check-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.explore-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.license-vendor-row td {
+  white-space: normal;
+}
+
+.vendor-check-list em {
+  font-style: normal;
+  color: #8a96a6;
+}
+
+/* License Utilizations overview: KPI cards, filters, product table, seats modal. */
+.license-overview {
+  margin-bottom: 18px;
+}
+
+.license-overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 4px 0 14px;
+}
+
+.license-overview-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: #10233f;
+}
+
+.license-overview-head p {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  color: #61748c;
+}
+
+.license-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.license-kpi {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid #e3eaf3;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.license-kpi > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.license-kpi span {
+  font-size: 13.5px;
+  color: #3b4f68;
+}
+
+.license-kpi strong {
+  font-size: 1.55rem;
+  line-height: 1.2;
+  color: #0b1b33;
+}
+
+.license-kpi-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: #eaf2ff;
+  color: #2563eb !important;
+}
+
+.license-kpi-chip {
+  align-self: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #f1f4f8;
+  color: #4a5d75;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.license-kpi-chip-good {
+  background: #e7f6ee;
+  color: #11734a;
+}
+
+.license-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(150px, 1fr)) auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.license-filters select,
+.license-search {
+  height: 42px;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #10233f;
+  font: inherit;
+  font-size: 14px;
+}
+
+.license-filters select {
+  width: 100%;
+  padding: 0 12px;
+}
+
+.license-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: #8a96a6;
+}
+
+.license-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #10233f;
+  font: inherit;
+}
+
+.license-reset {
+  border: 0;
+  background: none;
+  color: #2563eb;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.license-product-table {
+  border: 1px solid #e3eaf3;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.license-product-table table {
+  width: 100%;
+}
+
+.license-product-table th {
+  background: #f6f9fc;
+}
+
+.license-product-table th button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.license-product-table td {
+  vertical-align: middle;
+}
+
+/* Nine columns: keep them within the page at desktop widths. */
+.license-product-table table {
+  min-width: 0;
+}
+
+.license-product-table th,
+.license-product-table td {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.license-product-table .status-badge {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.license-product-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.license-product-name > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.license-product-name strong {
+  color: #0b1b33;
+}
+
+.license-product-name span {
+  font-size: 12.5px;
+  color: #61748c;
+}
+
+.license-utilization {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 90px;
+}
+
+.license-utilization span {
+  display: block;
+  height: 7px;
+  border-radius: 999px;
+  background: #e6ecf3;
+  overflow: hidden;
+}
+
+.license-utilization i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #2563eb;
+}
+
+.license-renewal {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.license-renewal span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #10233f;
+}
+
+.license-renewal small {
+  padding-left: 21px;
+  color: #61748c;
+}
+
+.license-seats-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #61748c;
+}
+
+.license-seats-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 0;
+  table-layout: fixed;
+  font-size: 14px;
+}
+
+.license-seats-table th:nth-child(1) { width: 20%; }
+.license-seats-table th:nth-child(2) { width: 15%; }
+.license-seats-table th:nth-child(4) { width: 12%; }
+
+.license-seats-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.license-seats-table th {
+  padding: 10px 8px;
+  border-bottom: 1px solid #e3eaf3;
+  text-align: left;
+  font-weight: 500;
+  color: #4a5d75;
+}
+
+.license-seats-table td {
+  padding: 12px 8px;
+  border-bottom: 1px solid #edf1f6;
+  vertical-align: top;
+}
+
+.license-seats-table td strong {
+  display: block;
+  color: #0b1b33;
+}
+
+.license-seats-table td small {
+  color: #8a96a6;
+  font-size: 12.5px;
+}
+
+.license-evidence {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.6;
+  color: #10233f;
+}
+
+.license-evidence-good {
+  color: #11734a;
+}
+
+.license-evidence-bad {
+  color: #b42318;
+}
+
+.license-evidence-muted {
+  color: #8a96a6;
+}
+
+@media (max-width: 1100px) {
+  .license-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .license-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .license-kpis,
+  .license-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
+.license-product-row {
+  cursor: pointer;
+}
+
+.license-product-row:hover td {
+  background: #f8fbff;
+}
+
+.license-product-row:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+.license-product-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.license-product-title .sample-row-tag,
+.license-seats-head .sample-row-tag {
+  margin-left: 0;
+  vertical-align: middle;
+}
+
+.license-seats-detail {
+  padding: 4px 0 8px;
+}
+
+.license-back {
+  margin-bottom: 12px;
+  padding: 6px 2px;
+  border: 0;
+  background: none;
+  color: #2563eb;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.license-seats-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.license-seats-head > div {
+  flex: 1;
+}
+
+.license-seats-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 1.1rem;
+  color: #0b1b33;
+  outline: none;
+}
+
+.license-seats-head p {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  color: #61748c;
+}
+
+.license-seats-card {
+  padding: 4px 16px 8px;
+  border: 1px solid #e3eaf3;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+/* App page: search and Status. */
+.license-filters.license-seat-filters {
+  grid-template-columns: minmax(220px, 2fr) minmax(180px, 1fr) auto;
+}
+
+@media (max-width: 1100px) {
+  .license-filters.license-seat-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.license-app-header .license-back {
+  margin-bottom: 6px;
+}
+
+.license-app-header .license-seats-head {
+  margin-bottom: 0;
+}
+
+.license-app-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 1.15rem;
+  color: #0b1b33;
+  outline: none;
 }

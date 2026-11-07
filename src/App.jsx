@@ -6,13 +6,12 @@ import AppCatalog from './components/AppCatalog';
 import AppNamePicker from './components/AppNamePicker';
 import ReportsInsights from './components/reports/ReportsInsights';
 import { ChartGrid } from './components/reports/DashboardView';
-import { AiToolLicenses, LicenseCategoryTabs, PlatformLicenses } from './components/LicenseCategories';
+import { LicenseCategoryTabs, PlatformLicenses } from './components/LicenseCategories';
 import NetworkCanvas from './components/NetworkCanvas';
 import CustomReportBuilder from './components/reports/CustomReportBuilder';
 import AppInventoryIcon from './components/AppInventoryIcon';
 import SettingsModal from './components/SettingsModal';
 import RuntimeBreakdown from './components/RuntimeBreakdown';
-import LicenseScopePicker from './components/LicenseScopePicker';
 import AppPlansModal from './components/AppPlansModal';
 import { planSummary } from './utils/appPlans';
 import {
@@ -36,6 +35,10 @@ import {
   vendorRuleFields,
 } from './utils/appRules';
 import InventoryAppPicker from './components/InventoryAppPicker';
+import { sampleLicenseGroups } from './data/sampleLicenseGroups';
+import LicenseOverview from './components/LicenseOverview';
+import { buildProductRows, sampleProductRows } from './utils/licenseOverview';
+import { appEngagementSeries } from './utils/appEngagement';
 import {
   getPortalClientId,
 } from './utils/clientPreferences';
@@ -1640,8 +1643,8 @@ function HistoricalTooltip({ active, payload, label }) {
 }
 
 function PeakUsageDot(props) {
-  const { cx, cy, dataKey, payload, stroke } = props;
-  const peakValue = Math.max(...engagementVelocity.map((entry) => entry[dataKey]));
+  const { cx, cy, dataKey, payload, stroke, series = engagementVelocity } = props;
+  const peakValue = Math.max(...series.map((entry) => Number(entry[dataKey]) || 0));
 
   if (payload[dataKey] !== peakValue) {
     return <circle cx={cx} cy={cy} r={2.5} fill="#ffffff" stroke={stroke} strokeWidth={1.5} />;
@@ -3305,18 +3308,44 @@ export default function App({ user = null, onSignOut = null }) {
     const timer = window.setInterval(load, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, []);
-  const allLicenseGroups = useMemo(
-    () => applyVendorRuleResults(buildLicenseGroups(allDeviceUsages, deploymentPolicyRecords, licensedApps), vendorRuleResults),
-    [allDeviceUsages, deploymentPolicyRecords, licensedApps, vendorRuleResults]
-  );
+  // "Sample data" adds fictional PCs to License Utilizations for demos; it is
+  // remembered per browser and never saved with the portal's data.
+  const [showSampleLicenses, setShowSampleLicenses] = useState(() => {
+    try {
+      return window.localStorage.getItem('license-sample-data') === 'on';
+    } catch {
+      return false;
+    }
+  });
+  const toggleSampleLicenses = (on) => {
+    setShowSampleLicenses(on);
+    try {
+      window.localStorage.setItem('license-sample-data', on ? 'on' : 'off');
+    } catch {
+      // Storage blocked: the switch still works for this visit.
+    }
+  };
+  const allLicenseGroups = useMemo(() => {
+    const real = applyVendorRuleResults(buildLicenseGroups(allDeviceUsages, deploymentPolicyRecords, licensedApps), vendorRuleResults);
+    return showSampleLicenses ? [...real, ...sampleLicenseGroups()] : real;
+  }, [allDeviceUsages, deploymentPolicyRecords, licensedApps, vendorRuleResults, showSampleLicenses]);
   // End User Licenses shows all of them, apps only, or AI tools and agents only.
-  const [licenseScope, setLicenseScope] = useState('all');
-  const licenseGroups = useMemo(
-    () =>
-      licenseScope === 'all'
-        ? allLicenseGroups
-        : allLicenseGroups.filter((group) => isAiLicenseGroup(group) === (licenseScope === 'ai')),
-    [allLicenseGroups, licenseScope]
+  const licenseGroups = allLicenseGroups;
+  // One row per software product: real ones from the inventory's plans and
+  // the seats on PCs, plus the sample products while Sample data is on.
+  const licenseProductRows = useMemo(() => {
+    const real = buildProductRows({ groups: allLicenseGroups.filter((group) => !group.sample), inventoryApps: licensedApps });
+    // Sample data replaces the real rows, so sample and real products with the
+    // same name never sit side by side.
+    const rows = showSampleLicenses ? sampleProductRows(allLicenseGroups.filter((group) => group.sample)) : real;
+    return rows;
+  }, [allLicenseGroups, licensedApps, showSampleLicenses]);
+  // The product open in License Utilizations: Core App Engagement then shows
+  // its use on each PC.
+  const [engagementProduct, setEngagementProduct] = useState(null);
+  const engagementChart = useMemo(
+    () => (engagementProduct ? appEngagementSeries(engagementProduct, allTelemetryHistory) : null),
+    [allTelemetryHistory, engagementProduct]
   );
   const [collapsedLicenseGroups, setCollapsedLicenseGroups] = useState(() => new Set());
   const toggleLicenseGroup = (groupId) =>
@@ -5028,207 +5057,6 @@ export default function App({ user = null, onSignOut = null }) {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const licenseTableSection = (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>{licenseScope === 'ai' ? 'AI Tools & Agents on PCs' : licenseScope === 'apps' ? 'End User App Licenses' : 'Licenses'}</h2>
-          <p>
-            One row per license on each PC, with its desktop app, extension and
-            web use underneath; the Tracker finds extension and web use on its own.
-            License decisions count all of them and are finalized at the end of
-            each evaluation window.
-          </p>
-          <div className="tracking-window-meta">
-            <span>
-              Evaluation window: {formatDateTime(evaluationWindow.startsAt)} to{' '}
-              {formatDateTime(evaluationWindow.endsAt)}
-            </span>
-            <span>{evaluationWindow.sampleCount} telemetry samples</span>
-          </div>
-        </div>
-        <div className="panel-actions">
-          {latestTelemetry?.timestamp && (
-            <span className="last-updated">
-              Updated {new Date(latestTelemetry.timestamp).toLocaleTimeString()}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="extension-summary-grid" aria-label="License summary">
-        <div>
-          <span>Overall monthly cost</span>
-          <strong>{formatCurrency(licenseSummary.monthlyCost)}</strong>
-        </div>
-        <div>
-          <span>Identified Monthly Savings</span>
-          <strong>{formatCurrency(licenseSummary.savings)}</strong>
-        </div>
-        <div>
-          <span>Licenses</span>
-          <strong>{licenseSummary.total}</strong>
-          <small>{licenseSummary.active} Actively Working</small>
-        </div>
-      </div>
-
-      <div className="table-wrap">
-        <table className="license-group-table">
-          <thead>
-            <tr>
-              <th>
-                <button type="button" onClick={() => requestSort('pcName')}>
-                  PC Name{renderSortIndicator('pcName')}
-                </button>
-              </th>
-              <th>
-                <button type="button" onClick={() => requestSort('appName')}>
-                  License{renderSortIndicator('appName')}
-                </button>
-              </th>
-              <th>
-                <button type="button" onClick={() => requestSort('status')}>
-                  Status{renderSortIndicator('status')}
-                </button>
-              </th>
-              <th>
-                <button type="button" onClick={() => requestSort('totalRuntimeSeconds')}>
-                  Tracked Runtime{renderSortIndicator('totalRuntimeSeconds')}
-                </button>
-              </th>
-              <th>
-                <button type="button" onClick={() => requestSort('monthlyCost')}>
-                  Cost Impact{renderSortIndicator('monthlyCost')}
-                </button>
-              </th>
-              <th>
-                <button type="button" onClick={() => requestSort('savingsOpportunity')}>
-                  Savings Opportunity{renderSortIndicator('savingsOpportunity')}
-                </button>
-              </th>
-              <th>Explore</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedLicenseGroups.map((group) => {
-              const isCollapsed = collapsedLicenseGroups.has(group.id);
-              return (
-                <Fragment key={group.id}>
-                  <tr className="license-group-row">
-                    <td>
-                      <span className="pc-name-chip">{group.pcName}</span>
-                    </td>
-                    <td>
-                      <div className="app-identity">
-                        <button
-                          className="license-toggle"
-                          type="button"
-                          aria-expanded={!isCollapsed}
-                          aria-label={`${isCollapsed ? 'Show' : 'Hide'} ${group.name} usage`}
-                          onClick={() => toggleLicenseGroup(group.id)}
-                        >
-                          {isCollapsed ? '▸' : '▾'}
-                        </button>
-                        <span className="app-icon">{group.icon}</span>
-                        <span className="app-name-stack">
-                          <strong>{group.name}</strong>
-                          <small>
-                            {trackedSurfaceCount(group)} tracked{' '}
-                            {trackedSurfaceCount(group) === 1 ? 'surface' : 'surfaces'}
-                          </small>
-                          {group.hostsExtensions.length > 0 && (
-                            <small className="license-hosts">
-                              Runs extensions:{' '}
-                              {group.hostsExtensions.map((host) => host.name).join(', ')}
-                            </small>
-                          )}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        className={`status-badge ${getStatusBadgeClass(group.status)}`}
-                        title={group.reclaimReason}
-                      >
-                        {group.status}
-                      </span>
-                      {group.vendorRule?.metText && (
-                        <small className="license-vendor-rule">
-                          Vendor activity: {group.vendorRule.metText}
-                          {group.vendorRule.mode === 'sample' ? ' · sample data' : ''}
-                        </small>
-                      )}
-                    </td>
-                    <td><RuntimeBreakdown entry={group} /></td>
-                    <td className="cost-impact-value">-{formatCurrency(group.monthlyCost)}</td>
-                    <td className={group.savingsOpportunity > 0 ? 'savings-value' : 'muted-value'}>
-                      {group.savingsOpportunity > 0
-                        ? `+${formatCurrency(group.savingsOpportunity)}`
-                        : formatCurrency(0)}
-                    </td>
-                    <td>
-                      <button
-                        className="explore-button"
-                        type="button"
-                        onClick={() => handleExploreDashboardAgent(group.pcName)}
-                      >
-                        <span className="action-symbol">›</span>
-                        Explore
-                      </button>
-                    </td>
-                  </tr>
-                  {!isCollapsed &&
-                    group.surfaces.map((surface) => (
-                      <tr
-                        className="license-surface-row"
-                        key={`${group.id}|${surface.surface}|${surface.detail}`}
-                      >
-                        <td />
-                        <td>
-                          <span className="app-name-stack license-surface-name">
-                            <strong>{surface.surface}</strong>
-                            <small>{surface.detail}</small>
-                          </span>
-                        </td>
-                        <td>
-                          {surface.notTracked ? (
-                            <span className="muted-value">Not detected yet</span>
-                          ) : surface.status === 'Not installed' ? (
-                            <span className={`status-badge ${getStatusBadgeClass(surface.status)}`}>
-                              {surface.status}
-                            </span>
-                          ) : (
-                            <span className="muted-value">
-                              {surface.lastSeenAt
-                                ? `Last used ${formatDateTime(surface.lastSeenAt)}`
-                                : 'Not detected yet'}
-                            </span>
-                          )}
-                        </td>
-                        <td><RuntimeBreakdown entry={surface} /></td>
-                        <td />
-                        <td />
-                        <td />
-                      </tr>
-                    ))}
-                </Fragment>
-              );
-            })}
-            {sortedLicenseGroups.length === 0 && (
-              <tr>
-                <td colSpan="7" className="empty-state">
-                  {licenseScope === 'ai'
-                    ? 'No AI tool or agent licenses deployed to a PC yet.'
-                    : 'Waiting for licensed app configuration.'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-
   return (
     <div className="app-shell">
       <AppNavigation
@@ -5837,43 +5665,22 @@ export default function App({ user = null, onSignOut = null }) {
 
         {activeView === 'dashboard' && (
           <>
-          <LicenseCategoryTabs value={licenseCategory} onChange={setLicenseCategory} />
+          {/* An open app's page has no category switch; All software brings it back. */}
+          {!engagementProduct && <LicenseCategoryTabs value={licenseCategory} onChange={setLicenseCategory} />}
           {licenseCategory === 'platform' && <PlatformLicenses />}
           {licenseCategory === 'end-user' && (
           <>
-          <LicenseScopePicker value={licenseScope} onChange={setLicenseScope} />
-          {licenseScope === 'ai' ? (
-            <AiToolLicenses>{licenseTableSection}</AiToolLicenses>
-          ) : (
+          {(
           <>
-          <section className="summary-grid" aria-label="Executive summary">
-            <article className="summary-card">
-              <span>Total Monthly Software Spend</span>
-              <strong>{formatCurrency(licenseSummary.monthlyCost)}</strong>
-              <small>{licenseScope === 'apps' ? 'App license cost' : 'App license cost + AI license cost'}</small>
-            </article>
-            <article className="summary-card summary-card-alert">
-              <span>Identified Monthly Savings</span>
-              <strong>{formatCurrency(licenseSummary.savings)}</strong>
-              <small>{licenseScope === 'apps' ? 'Reclaimable app cost' : 'Reclaimable app cost + AI license cost'}</small>
-            </article>
-            <article className="summary-card">
-              <span>Reclaimable Licenses</span>
-              <strong>
-                {licenseSummary.reclaimable}{' '}
-                <small className="inline-strong-note">
-                  from {licenseSummary.total} total licenses
-                </small>
-              </strong>
-              <small>
-                {licenseScope === 'apps'
-                  ? `${licenseSummary.reclaimable} App Licenses`
-                  : `${licenseSummary.reclaimable - licenseSummary.reclaimableAi} App Licenses + ${licenseSummary.reclaimableAi} AI Licenses`}
-              </small>
-            </article>
-          </section>
-
-          {licenseTableSection}
+          <LicenseOverview
+              inventoryApps={licensedApps}
+              rows={licenseProductRows}
+              showSample={showSampleLicenses}
+              subtitle="Seats bought, seats in use on PCs, and what each costs. Open a product to see the evidence behind every seat."
+              title="Licenses"
+              onToggleSample={toggleSampleLicenses}
+              onSelectRow={setEngagementProduct}
+            />
 
           <section className="panel compact-panel trends-panel">
             <div className="panel-header">
@@ -5965,14 +5772,24 @@ export default function App({ user = null, onSignOut = null }) {
               <article className="chart-card">
                 <div className="chart-card-header">
                   <div>
-                    <h3>Core App Engagement (24h Velocity)</h3>
-                    <p>Active minutes by hour for key engineering and design apps.</p>
+                    <h3>
+                      Core App Engagement (24h Velocity)
+                      {engagementChart ? ` · ${engagementProduct.name}` : ''}
+                    </h3>
+                    <p>
+                      {engagementChart
+                        ? `Active minutes by hour on each PC using ${engagementProduct.name}${engagementChart.sample ? ' (sample data)' : ''}.`
+                        : 'Active minutes by hour for key engineering and design apps.'}
+                    </p>
                   </div>
                 </div>
                 <div className="chart-frame">
+                  {engagementChart && engagementChart.lines.length === 0 ? (
+                    <p className="empty-state">No PC has reported {engagementProduct.name} use in the last 24 hours.</p>
+                  ) : (
                   <ResponsiveContainer width="100%" height={280}>
                     <LineChart
-                      data={engagementVelocity}
+                      data={engagementChart ? engagementChart.data : engagementVelocity}
                       margin={{ top: 16, right: 18, left: 0, bottom: 2 }}
                     >
                       <CartesianGrid
@@ -6001,36 +5818,29 @@ export default function App({ user = null, onSignOut = null }) {
                         }}
                       />
                       <Tooltip content={<HistoricalTooltip />} />
-                      <Legend content={<ChartLegend />} />
-                      <Line
-                        dataKey="adobeCc"
-                        name="Adobe CC"
-                        type="monotone"
-                        stroke="#e74c3c"
-                        strokeWidth={2.4}
-                        dot={<PeakUsageDot />}
-                        activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
-                      />
-                      <Line
-                        dataKey="figma"
-                        name="Figma"
-                        type="monotone"
-                        stroke="#8e44ad"
-                        strokeWidth={2.4}
-                        dot={<PeakUsageDot />}
-                        activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
-                      />
-                      <Line
-                        dataKey="vsCode"
-                        name="VS Code"
-                        type="monotone"
-                        stroke="#2980b9"
-                        strokeWidth={2.4}
-                        dot={<PeakUsageDot />}
-                        activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
-                      />
+                      {!engagementChart && <Legend content={<ChartLegend />} />}
+                      {(engagementChart
+                        ? engagementChart.lines
+                        : [
+                            { key: 'adobeCc', name: 'Adobe CC', color: '#e74c3c' },
+                            { key: 'figma', name: 'Figma', color: '#8e44ad' },
+                            { key: 'vsCode', name: 'VS Code', color: '#2980b9' },
+                          ]
+                      ).map((line) => (
+                        <Line
+                          activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
+                          dataKey={line.key}
+                          dot={<PeakUsageDot series={engagementChart ? engagementChart.data : engagementVelocity} />}
+                          key={line.key}
+                          name={line.name}
+                          stroke={line.color}
+                          strokeWidth={2.4}
+                          type="monotone"
+                        />
+                      ))}
                     </LineChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
               </article>
             </div>
