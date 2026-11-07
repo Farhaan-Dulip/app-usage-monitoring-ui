@@ -8,13 +8,12 @@
 // facts the API knows (Snowflake contract amount and dates, Azure reservation
 // expiries) are read from the API data.
 import { DAY_MS, isoDay, lastDays } from '../aiTools/http.js';
-import { sampleAtlassian, sampleAzure, sampleDatadog, sampleSnowflake } from './samples.js';
+import { sampleAzure, sampleDatadog, sampleSnowflake } from './samples.js';
 
 export const PLATFORMS = [
   { id: 'azure', name: 'Microsoft Azure', vendor: 'Microsoft', category: 'Cloud infrastructure' },
   { id: 'snowflake', name: 'Snowflake', vendor: 'Snowflake', category: 'Data platform' },
   { id: 'datadog', name: 'Datadog', vendor: 'Datadog', category: 'Observability' },
-  { id: 'atlassian', name: 'Atlassian', vendor: 'Atlassian', category: 'Collaboration platform' },
 ];
 
 export const API_INFO = {
@@ -39,14 +38,9 @@ export const API_INFO = {
     ['GET /api/v2/usage/hourly_usage (infra_hosts, apm)', 'docs; fields unverified'],
     ['GET /api/v1/hosts', 'docs'],
   ] },
-  atlassian: { name: 'Atlassian Organizations REST API', endpoints: [
-    ['GET /admin/v1/orgs/{orgId}/users (product access, last active)', 'docs'],
-    ['GET /admin/v2/orgs/{orgId}/workspaces (products, plans)', 'docs; fields unverified'],
-    ['Pricing and tiers', 'contract (no public billing API)'],
-  ] },
 };
 
-const SAMPLES = { azure: sampleAzure, snowflake: sampleSnowflake, datadog: sampleDatadog, atlassian: sampleAtlassian };
+const SAMPLES = { azure: sampleAzure, snowflake: sampleSnowflake, datadog: sampleDatadog };
 
 // ------------------------------------------------------------------ contracts
 const day = (now, offset) => isoDay(now.getTime() + offset * DAY_MS);
@@ -56,11 +50,6 @@ export function sampleContract(platformId, now = new Date()) {
     azure: { agreement: 'Microsoft Azure Consumption Commitment (MACC), Microsoft Customer Agreement', contractNumber: 'MCA-2025-88213', startDate: day(now, -225), endDate: day(now, 140), commitmentAmount: 600000, consumedAmount: 336400, currency: 'USD', billing: 'Monthly in arrears against the commitment', autoRenew: false, noticeDays: 90, discountPercent: 12, owner: 'Cloud Platform team', notes: 'Azure Databricks and Marketplace purchases count toward the commitment.' },
     snowflake: { agreement: 'Capacity contract, Enterprise edition', contractNumber: '4471', startDate: day(now, -290), endDate: day(now, 75), commitmentAmount: 300000, consumedAmount: null, currency: 'USD', billing: 'Annual prepaid capacity', autoRenew: false, noticeDays: 30, discountPercent: 15, owner: 'Data Engineering', notes: 'Unused capacity can roll over only if renewed at the same or higher amount.' },
     datadog: { agreement: 'Annual committed plan (Pro): 150 infrastructure hosts, 55 APM hosts', contractNumber: 'DD-ORD-2025-1187', startDate: day(now, -325), endDate: day(now, 40), commitmentAmount: 210000, consumedAmount: 189600, currency: 'USD', billing: 'Monthly committed, on-demand billed in arrears', autoRenew: true, noticeDays: 30, discountPercent: 18, owner: 'SRE team', notes: 'Hosts above the commitment are billed at on-demand rates.', units: { infraHosts: 150, apmHosts: 55 } },
-    atlassian: { agreement: 'Atlassian Cloud annual subscription: Jira Premium, Confluence Standard, Jira Service Management Standard', contractNumber: 'AT-219-845-662', startDate: day(now, -155), endDate: day(now, 210), commitmentAmount: 69870, consumedAmount: null, currency: 'USD', billing: 'Annual prepaid', autoRenew: true, noticeDays: 30, discountPercent: 0, owner: 'IT Operations', notes: 'Priced by user tier; moving down a tier only takes effect at renewal.', units: { products: [
-      { key: 'jira-software', name: 'Jira (Premium)', tier: 250, unitPrice: 15.25 },
-      { key: 'confluence', name: 'Confluence (Standard)', tier: 200, unitPrice: 6.05 },
-      { key: 'jira-servicedesk', name: 'Jira Service Management (Standard, agents)', tier: 40, unitPrice: 20 },
-    ] } },
   };
   return contracts[platformId] ? { ...contracts[platformId], source: 'sample' } : null;
 }
@@ -504,79 +493,6 @@ const BUILDERS = {
     };
   },
 
-  atlassian(raw, contract, now) {
-    const users = raw.orgUsers.data.filter((user) => user.account_status === 'active' && user.access_billable);
-    const tiers = contract.units?.products || [];
-    const ageOf = (value) => (value ? Math.floor((now.getTime() - Date.parse(value)) / DAY_MS) : null);
-    const products = raw.workspaces.data.map((workspace) => {
-      const key = workspace.attributes.typeKey;
-      const tier = tiers.find((item) => item.key === key) || {};
-      const access = users.map((user) => user.product_access.find((item) => item.key === key)).filter(Boolean);
-      const inactive = access.filter((item) => ageOf(item.last_active) > 90).length;
-      const monthly = (tier.tier || access.length) * (tier.unitPrice || 0);
-      return {
-        id: key, name: tier.name || workspace.attributes.name, plan: workspace.attributes.planKey, licensed: access.length, tier: tier.tier || null,
-        active30: access.filter((item) => ageOf(item.last_active) <= 30).length, inactive, monthly: round(monthly), unitPrice: tier.unitPrice || 0,
-        saving: round(inactive * (tier.unitPrice || 0)),
-      };
-    });
-    const monthlyCost = sum(products, (product) => product.monthly);
-    const inactiveUsers = users
-      .map((user) => ({ id: user.account_id, name: user.name, email: user.email, lastActiveAt: user.last_active, days: ageOf(user.last_active), products: user.product_access.map((item) => item.name).join(', ') }))
-      .filter((user) => user.days > 90)
-      .sort((a, b) => b.days - a.days);
-    const saving = sum(products, (product) => product.saving);
-    const renewals = [renewalItem({ name: 'Atlassian Cloud subscription', type: 'Contract', endDate: contract.endDate, noticeDays: contract.noticeDays, autoRenew: contract.autoRenew, amount: contract.commitmentAmount }, now)];
-
-    return {
-      opportunities: products.filter((product) => product.saving > 0).map((product) => ({ id: `atlassian:${product.id}`, action: `Remove ${product.inactive} inactive ${product.name} users`, detail: 'Atlassian · no activity in 90+ days', impact: product.saving })),
-      licensing: { unit: 'User tiers (annual)', entitlement: products.map((product) => `${product.name.split(' (')[0]} ${product.licensed}/${product.tier ?? '—'}`).join(' · '), pace: null },
-      summary: { mtdCost: monthlyCost * monthFraction(now), forecastCost: monthlyCost, savingsMonthly: saving, insights: inactiveUsers.length ? products.filter((product) => product.inactive > 0).length : 0 },
-      renewals,
-      sections: [
-        {
-          id: 'cost',
-          title: 'Cost monitoring',
-          description: 'Atlassian has no public billing API: cost is the contract price per user tier. Licensed users come from the Organizations API.',
-          kpis: [
-            { label: 'Monthly cost (contract)', value: monthlyCost, format: 'usd' },
-            { label: 'Annual cost', value: monthlyCost * 12, format: 'usd' },
-            { label: 'Billable users', value: users.length, format: 'number' },
-            { label: 'Cost per active user / month', value: monthlyCost / Math.max(1, users.filter((user) => ageOf(user.last_active) <= 30).length), format: 'usd' },
-          ],
-          charts: [
-            { id: 'products', title: 'Monthly cost by product', type: 'bar', xKey: 'name', series: [{ key: 'monthly', label: 'Cost', format: 'usd' }], data: products },
-            { id: 'tiers', title: 'Licensed users vs user tier', type: 'bar', xKey: 'name', series: [{ key: 'licensed', label: 'Licensed users' }, { key: 'active30', label: 'Active (30 days)' }, { key: 'tier', label: 'Tier' }], data: products },
-          ],
-          tables: [],
-          notes: [],
-        },
-        {
-          id: 'insights',
-          title: 'Infra insights',
-          description: 'Billable users who have not used a product for 90+ days. Removing them can keep you in, or move you to, a lower user tier at renewal.',
-          kpis: [
-            { label: 'Inactive billable users (90d+)', value: inactiveUsers.length, format: 'number' },
-            { label: 'Potential saving / month', value: saving, format: 'usd' },
-            { label: 'Products with inactive users', value: products.filter((product) => product.inactive > 0).length, format: 'number' },
-          ],
-          charts: [],
-          tables: [
-            { title: 'By product', columns: [
-              { key: 'name', label: 'Product', format: 'text' }, { key: 'plan', label: 'Plan', format: 'text' }, { key: 'licensed', label: 'Licensed users', format: 'number' },
-              { key: 'tier', label: 'Tier', format: 'number' }, { key: 'active30', label: 'Active (30d)', format: 'number' }, { key: 'inactive', label: 'Inactive (90d+)', format: 'number' }, { key: 'saving', label: 'Saving / month', format: 'usd' },
-            ], rows: products },
-            { title: 'Inactive users', columns: [
-              { key: 'name', label: 'User', format: 'text' }, { key: 'products', label: 'Products', format: 'text' }, { key: 'lastActiveAt', label: 'Last active', format: 'date' },
-            ], rows: inactiveUsers.slice(0, 40) },
-          ],
-          notes: [],
-        },
-        contractSection(contract, null),
-        renewalsSection(renewals),
-      ],
-    };
-  },
 };
 
 function contractFor(platformId, saved, now) {

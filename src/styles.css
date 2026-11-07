@@ -5977,3 +5977,218 @@ label.platform-contract-check {
   font-size: 13px;
   color: #be2634;
 }
+
+/* Recognised apps: a card starts from that app. */
+.catalog-card-selectable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.catalog-card-selectable:hover {
+  border-color: #1a7fc4;
+  box-shadow: 0 0 0 3px rgba(26, 127, 196, 0.12);
+}
+
+.catalog-card .catalog-card-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.catalog-card .catalog-api-access {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.catalog-card .catalog-api-access.available {
+  background: #e7f6ee;
+  color: #1a7a4c;
+}
+
+/* The API label sits on its own line so the details keep the card's width. */
+.app-catalog-modal-content .catalog-card {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.app-catalog-modal-content .catalog-card .catalog-api-access {
+  margin-left: 50px;
+}
+
+.app-catalog-modal-content .catalog-detection dd.catalog-api {
+  white-space: normal;
+}
+
+/* Status and Connect share the first line; the message gets its own. */
+.app-plans-connection > span:not(.status-badge) {
+  flex: 0 0 100%;
+  order: 3;
+}
+
+/* App Rules: one rule per app, edited in place under its row. */
+.app-rules-panel {
+  margin-bottom: 18px;
+}
+
+.app-rules-panel .device-identity {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-rules-panel .device-identity > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-rules-default td {
+  background: #f6f9fc;
+}
+
+.app-rules-inherited {
+  color: #64748b;
+  font-style: italic;
+}
+
+.app-rules-empty {
+  color: #64748b;
+  text-align: center;
+}
+
+.app-rule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+}
+
+.app-rule-form .deploy-form.app-rule-row {
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  padding: 12px 20px 8px;
+}
+
+.app-rule-form .deploy-form.app-rule-row.app-rule-app-row {
+  grid-template-columns: repeat(2, minmax(200px, 420px));
+  /* App Name on the left, Policy in the right corner. */
+  justify-content: space-between;
+}
+
+.app-rule-new-policy {
+  position: relative;
+  display: block;
+}
+
+.app-rule-new-policy input {
+  padding-right: 38px;
+}
+
+.app-rule-new-policy-cancel {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: #eef3f9;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.app-rule-new-policy-cancel:hover {
+  background: #dce5f0;
+  color: #10233f;
+}
+
+.app-rule-group {
+  margin: 4px 20px 0;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.app-rule-group h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #10233f;
+}
+
+.app-rule-group p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.app-rule-group .deploy-form.app-rule-row {
+  padding: 12px 0 4px;
+  /* Notes under the fields can wrap; keep the labels and inputs level. */
+  align-items: start;
+}
+
+.app-rule-group small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #64748b;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.app-rule-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 20px 12px;
+}
+
+.app-rule-form .deploy-agent-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 900px) {
+  .app-rule-form .deploy-form.app-rule-row,
+  .app-rule-form .deploy-form.app-rule-row.app-rule-app-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.app-rules-missing {
+  color: #be2634;
+  font-weight: 600;
+}
+
+.tracker-deployment-list {
+  margin: 0 20px 16px;
+}
+
+.tracker-deployment-time {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.license-vendor-rule {
+  display: block;
+  margin-top: 5px;
+  max-width: 220px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: #0f7a4a;
+}

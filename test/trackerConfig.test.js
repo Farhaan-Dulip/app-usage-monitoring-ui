@@ -32,3 +32,12 @@ test('without a reporting PC all records are used', () => {
   assert.deepEqual(config.licensed_apps.sort(), ['idea64.exe', 'postman.exe']);
   assert.deepEqual(config.tracked_urls, []);
 });
+
+test('an extension with no parent app is not mistaken for an application', () => {
+  const config = deriveTrackerConfig([
+    { target_pc: 'PC-1', app_name: 'Postman.exe', type: 'application', parent_app: null },
+    { target_pc: 'PC-1', app_name: 'github-copilot', type: 'agent', parent_app: null, reclaim_policy: {} },
+  ], null, 'PC-1');
+  assert.deepEqual(config.licensed_apps, ['postman.exe']);
+  assert.deepEqual(config.extensions.map((e) => [e.name, e.parent_app]), [['github-copilot', '']]);
+});

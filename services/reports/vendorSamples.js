@@ -9,105 +9,6 @@ import { SAMPLE_LEVEL, samplePeople, sampleRandom, sampleSeed } from '../aiTools
 const pick = (rand, items) => items[Math.floor(rand() * items.length) % items.length];
 const ago = (now, days, rand) => new Date(now.getTime() - days * DAY_MS - Math.floor(rand() * 10) * 3600000).toISOString();
 
-// Cursor Admin API: GET /teams/members, POST /teams/daily-usage-data, POST /teams/spend.
-export function sampleCursor(now, identities) {
-  const rand = sampleRandom(sampleSeed(now, 11));
-  const everyone = samplePeople(identities).filter((_, index) => index % 4 !== 3);
-  const teamMembers = everyone.map(([name, , , email], index) => ({
-    id: `user_sample${String(index + 1).padStart(4, '0')}`,
-    name,
-    email,
-    role: index === 0 ? 'owner' : 'member',
-    isRemoved: false,
-  }));
-  const data = [];
-  for (const day of lastDays(now, 30)) {
-    everyone.forEach(([, , level, email], index) => {
-      const activity = SAMPLE_LEVEL[level];
-      if (rand() > activity) return;
-      const tabsShown = Math.floor(80 + rand() * 300 * activity);
-      const linesAdded = Math.floor(200 + rand() * 1400 * activity);
-      const applies = Math.floor(10 + rand() * 80 * activity);
-      data.push({
-        userId: 10000 + index,
-        day,
-        date: Date.parse(`${day}T00:00:00Z`),
-        email,
-        isActive: true,
-        totalLinesAdded: linesAdded,
-        totalLinesDeleted: Math.floor(linesAdded * (0.3 + rand() * 0.3)),
-        acceptedLinesAdded: Math.floor(linesAdded * (0.55 + rand() * 0.25)),
-        acceptedLinesDeleted: Math.floor(linesAdded * 0.2),
-        totalApplies: applies,
-        totalAccepts: Math.floor(applies * (0.7 + rand() * 0.2)),
-        totalRejects: Math.floor(applies * 0.12),
-        totalTabsShown: tabsShown,
-        totalTabsAccepted: Math.floor(tabsShown * (0.6 + rand() * 0.25)),
-        composerRequests: Math.floor(rand() * 40 * activity),
-        chatRequests: Math.floor(20 + rand() * 90 * activity),
-        agentRequests: Math.floor(rand() * (index % 3 === 0 ? 40 : 10) * activity),
-        cmdkUsages: Math.floor(rand() * 50 * activity),
-        subscriptionIncludedReqs: Math.floor(40 + rand() * 120 * activity),
-        apiKeyReqs: 0,
-        usageBasedReqs: Math.floor(rand() * 8 * activity),
-        bugbotUsages: Math.floor(rand() * 3),
-        mostUsedModel: pick(rand, ['claude-sonnet-5-5', 'gpt-5', 'claude-opus-5-5', 'auto']),
-        applyMostUsedExtension: pick(rand, ['.tsx', '.ts', '.py', '.cs']),
-        tabMostUsedExtension: pick(rand, ['.ts', '.tsx', '.py']),
-        clientVersion: pick(rand, ['1.7.12', '1.7.9', '1.6.45']),
-      });
-    });
-  }
-  const teamMemberSpend = everyone.map(([name, , level, email], index) => {
-    const spendCents = Math.round((900 + rand() * 4200 * SAMPLE_LEVEL[level]) * 1000) / 1000;
-    return {
-      userId: teamMembers[index].id,
-      spendCents,
-      overallSpendCents: spendCents,
-      fastPremiumRequests: Math.floor(spendCents / 4),
-      name,
-      email,
-      role: teamMembers[index].role,
-      hardLimitOverrideDollars: 0,
-      monthlyLimitDollars: 100,
-      effectivePerUserLimitDollars: 100,
-    };
-  });
-  return {
-    members: { teamMembers },
-    dailyUsage: { data, period: { startDate: Date.parse(`${lastDays(now, 30)[0]}T00:00:00Z`), endDate: now.getTime() } },
-    spend: { teamMemberSpend, subscriptionCycleStart: Date.parse(`${now.toISOString().slice(0, 7)}-01T00:00:00Z`), totalMembers: teamMembers.length, totalPages: 1 },
-  };
-}
-
-// Slack: team.billableInfo (billing_active per user) and member analytics rows.
-export function sampleSlack(now, identities) {
-  const rand = sampleRandom(sampleSeed(now, 12));
-  const everyone = samplePeople(identities);
-  const ids = everyone.map((_, index) => `U0${(7000 + index * 37).toString(36).toUpperCase()}SAMPLE`);
-  const billable_info = Object.fromEntries(everyone.map(([, , level], index) => [ids[index], { billing_active: level !== 'idle' }]));
-  const memberAnalytics = [];
-  for (const day of lastDays(now, 30)) {
-    everyone.forEach(([, , level, email], index) => {
-      const active = level !== 'idle' && rand() < 0.35 + SAMPLE_LEVEL[level] * 0.6;
-      memberAnalytics.push({
-        date: day,
-        user_id: ids[index],
-        email_address: email,
-        is_guest: false,
-        is_billable_seat: level !== 'idle',
-        is_active: active,
-        is_active_desktop: active && rand() < 0.9,
-        is_active_ios: active && rand() < 0.3,
-        messages_posted_count: active ? Math.floor(4 + rand() * 60 * Math.max(SAMPLE_LEVEL[level], 0.3)) : 0,
-        reactions_added_count: active ? Math.floor(rand() * 20) : 0,
-        files_added_count: active ? Math.floor(rand() * 4) : 0,
-      });
-    });
-  }
-  return { billableInfo: { ok: true, billable_info }, memberAnalytics, users: everyone.map(([name, , , email], index) => ({ id: ids[index], real_name: name, profile: { email } })) };
-}
-
 // Zoom: GET /users (type 1 Basic, 2 Licensed) and GET /report/daily.
 export function sampleZoom(now, identities) {
   const rand = sampleRandom(sampleSeed(now, 13));
@@ -174,7 +75,21 @@ export function sampleFigma(now, identities) {
   return { seats, activityLogs: { error: false, status: 200, meta: { activity_logs, cursor: '', next_page: false } } };
 }
 
-// Postman: GET /users (team) and audit logs.
+// Postman: GET /users (team), GET /audit-actions and GET /audit/logs, in the
+// shapes Postman's API reference documents. The audit log holds account
+// events: sign-ins (how often depends on how active someone is; the desktop
+// app stays signed in) and the odd sign-out or API key event. Action codes
+// here are sample values; live codes come from GET /audit-actions.
+const POSTMAN_SAMPLE_ACTIONS = [
+  { code: 'user.login_password', name: 'User Logged-In Using Password' },
+  { code: 'user.login_sso', name: 'User Logged-In Using SSO' },
+  { code: 'user.login_google', name: 'User Logged-In Using Google OAuth' },
+  { code: 'user.logout', name: 'User Logged-out' },
+  { code: 'api_key.create', name: 'Created Postman API Key' },
+];
+// Days between sign-ins for each activity level (idle people don't sign in).
+const POSTMAN_SIGN_IN_GAP = { heavy: 4, regular: 9, light: 25 };
+
 export function samplePostman(now, identities) {
   const rand = sampleRandom(sampleSeed(now, 15));
   const everyone = samplePeople(identities);
@@ -186,94 +101,33 @@ export function samplePostman(now, identities) {
     roles: index === 0 ? ['admin', 'user'] : index % 4 === 0 ? ['billing', 'user'] : ['user'],
     joinedAt: ago(now, 400 - index * 30, rand),
   }));
+  const team = { name: 'Allion Engineering', id: 4410 };
   const trails = [];
-  for (const day of lastDays(now, 30)) {
-    everyone.forEach(([name, login, level, email], index) => {
-      const events = Math.floor(rand() * 4 * SAMPLE_LEVEL[level]);
-      for (let event = 0; event < events; event += 1) {
-        trails.push({
-          id: trails.length + 1,
-          ip: '203.0.113.10',
-          userAgent: 'PostmanRuntime/7.43',
-          action: pick(rand, ['collection.update', 'request.create', 'environment.update', 'collection.fork', 'workspace.update']),
-          timestamp: new Date(Date.parse(`${day}T08:00:00Z`) + event * 3600000).toISOString(),
-          message: `${name} made a change`,
-          actor: { id: data[index].id, name, username: login, email, active: true },
-        });
-      }
+  const event = (index, code, daysAgo) => {
+    const [name, login, , email] = everyone[index];
+    const action = POSTMAN_SAMPLE_ACTIONS.find((item) => item.code === code);
+    trails.push({
+      id: 95000000 + trails.length,
+      ip: '203.0.113.10',
+      userAgent: 'PostmanClient/11.30.4 (AppId=Desktop; Platform=win32)',
+      action: code,
+      timestamp: ago(now, daysAgo, rand),
+      message: `${name} ${action.name.replace(/^User /, '').toLowerCase()}`,
+      data: { actor: { name, username: login, email, id: data[index].id, active: true }, team },
     });
-  }
-  return { users: { data }, auditLogs: { trails } };
-}
-
-// Docker Hub: GET /v2/orgs/{org}/members (insights fields when enabled).
-export function sampleDocker(now, identities) {
-  const rand = sampleRandom(sampleSeed(now, 16));
-  const everyone = samplePeople(identities);
-  const results = everyone.map(([name, login, level, email], index) => ({
-    id: `docker-user-${index + 1}`,
-    username: login,
-    full_name: name,
-    email,
-    type: 'User',
-    role: index === 0 ? 'Owner' : index % 5 === 0 ? 'Editor' : 'Member',
-    groups: [index % 2 === 0 ? 'developers' : 'platform'],
-    is_guest: false,
-    date_joined: ago(now, 500 - index * 40, rand),
-    last_logged_in_at: level === 'idle' ? ago(now, 60 + index * 5, rand) : ago(now, Math.floor(rand() * 10), rand),
-    last_seen_at: level === 'idle' ? ago(now, 55 + index * 5, rand) : ago(now, Math.floor(rand() * 6), rand),
-    last_desktop_version: pick(rand, ['4.45.0', '4.44.3', '4.41.2', '4.37.1']),
-  }));
-  return { members: { count: results.length, next: null, previous: null, results } };
-}
-
-// JetBrains Account API: organization licences (field names not verified).
-export function sampleJetBrains(now, identities) {
-  const rand = sampleRandom(sampleSeed(now, 17));
-  const everyone = samplePeople(identities);
-  const products = [
-    { code: 'II', name: 'IntelliJ IDEA Ultimate' },
-    { code: 'WS', name: 'WebStorm' },
-    { code: 'AI', name: 'JetBrains AI Pro' },
-  ];
-  const licenses = [];
-  everyone.forEach(([name, , level, email], index) => {
-    licenses.push({
-      licenseId: `LIC${(10000 + index).toString(36).toUpperCase()}`,
-      product: products[index % 3 === 2 ? 1 : 0],
-      team: { id: 1, name: 'Engineering' },
-      assignee: { type: 'USER', email, name },
-      lastSeen: { lastSeenDate: level === 'idle' ? ago(now, 70, rand) : ago(now, Math.floor(rand() * 5), rand) },
-      isTrial: false,
-    });
+  };
+  everyone.forEach(([, , level], index) => {
+    const gap = POSTMAN_SIGN_IN_GAP[level];
+    if (!gap) return;
+    const via = pick(rand, ['user.login_password', 'user.login_sso', 'user.login_sso', 'user.login_google']);
+    for (let daysAgo = Math.floor(rand() * gap); daysAgo < 180; daysAgo += gap + Math.floor(rand() * gap)) {
+      event(index, via, daysAgo);
+      if (rand() < 0.15) event(index, 'user.logout', Math.max(0, daysAgo - 1));
+    }
+    if (index % 5 === 1) event(index, 'api_key.create', 20 + index);
   });
-  for (let spare = 0; spare < 3; spare += 1) {
-    licenses.push({ licenseId: `LICSPARE${spare}`, product: products[spare === 2 ? 2 : 0], team: { id: 1, name: 'Engineering' }, assignee: null, lastSeen: null, isTrial: false });
-  }
-  return { licenses };
-}
-
-// ChatGPT Enterprise usage analytics (daily per user; field names not verified).
-export function sampleChatGpt(now, identities) {
-  const rand = sampleRandom(sampleSeed(now, 18));
-  const everyone = samplePeople(identities);
-  const data = [];
-  for (const day of lastDays(now, 30)) {
-    everyone.forEach(([name, , level, email]) => {
-      if (rand() > 0.2 + SAMPLE_LEVEL[level] * 0.7) return;
-      const messages = Math.floor(5 + rand() * 70 * Math.max(SAMPLE_LEVEL[level], 0.25));
-      data.push({
-        date: day,
-        user_email: email,
-        user_name: name,
-        messages,
-        gpt_messages: Math.floor(messages * rand() * 0.3),
-        tool_messages: Math.floor(messages * rand() * 0.25),
-        models: { 'gpt-5': Math.floor(messages * 0.7), 'gpt-5-thinking': Math.ceil(messages * 0.3) },
-      });
-    });
-  }
-  return { usage: { data }, seats: everyone.map(([name, , , email]) => ({ email, name, role: 'standard-user', status: 'active' })) };
+  trails.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+  return { users: { data }, auditActions: { data: POSTMAN_SAMPLE_ACTIONS }, auditLogs: { trails } };
 }
 
 export { isoDay };

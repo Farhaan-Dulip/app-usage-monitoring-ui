@@ -121,7 +121,7 @@ export function sampleCopilotRaw(now = new Date(), identities = []) {
       assigning_team: null,
       created_at: new Date(now.getTime() - (200 - index * 11) * DAY_MS).toISOString(),
       last_activity_at: new Date(now.getTime() - idleFor * DAY_MS - Math.floor(rand() * 8) * 3600000).toISOString(),
-      last_activity_editor: ['vscode/1.105.0/copilot-chat/0.32.0', 'JetBrains-IU/2026.2/copilot/1.6.0'][index % 2],
+      last_activity_editor: ['vscode/1.105.0/copilot-chat/0.32.0', 'vscode/1.104.0/copilot-chat/0.31.0'][index % 2],
       last_authenticated_at: new Date(now.getTime() - idleFor * DAY_MS).toISOString(),
       pending_cancellation_date: null,
       plan_type: 'enterprise',

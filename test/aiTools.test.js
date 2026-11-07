@@ -52,6 +52,9 @@ test('Claude: admin headers, cursor pagination, one Claude Code call per day', a
   assert.equal(a.linesAdded, 100);
   assert.equal(a.acceptanceRate, 0.9);
   assert.equal(a.costUsd, 2.5);
+  assert.equal(a.activeDays, 1);
+  assert.equal(a.acceptedEdits, 9);
+  assert.equal(card.members.find((member) => member.email === 'b@x.com').activeDays, 0);
   assert.equal(card.members.find((member) => member.email === 'b@x.com').status, 'never');
   // Cost report amounts are cents as decimal strings.
   assert.equal(card.daily.points[0].value, 123.456);
@@ -102,6 +105,8 @@ test('Codex: workspace URL, bearer key, per-user totals', async () => {
     [(u) => u.startsWith('https://api.chatgpt.com/v1/analytics/codex/workspaces/ws_1/usage'), () => json({
       data: [
         { date: '2026-10-18', user_email: 'A@x.com', threads: 2, turns: 9, credits: 4.5, tokens: { uncached_input: 10, cached_input: 20, output: 5 }, by_client: [{ client: 'cli' }] },
+        // A day with no turns isn't an active day.
+        { date: '2026-10-17', user_email: 'a@x.com', threads: 0, turns: 0, credits: 0, tokens: { total: 0 } },
         { date: '2026-09-01', user_email: 'b@x.com', threads: 1, turns: 2, credits: 1, tokens: { total: 7 } },
       ],
       has_more: false,
@@ -113,6 +118,7 @@ test('Codex: workspace URL, bearer key, per-user totals', async () => {
   const card = normalizeCodex(raw, now);
   const a = card.members.find((member) => member.email === 'a@x.com');
   assert.deepEqual([a.turns, a.credits, a.tokens, a.clients, a.status], [9, 4.5, 35, 'cli', 'active']);
+  assert.deepEqual([a.activeDays, a.lastActiveAt], [1, '2026-10-18']);
   assert.equal(card.members.find((member) => member.email === 'b@x.com').status, 'idle');
 });
 

@@ -353,45 +353,5 @@ export function sampleDatadog(now) {
   };
   return { estimatedCost, projectedCost, historicalCost, hourlyUsage, hosts };
 }
-
-// ------------------------------------------------------------------- Atlassian
 const FIRST = ['Ava', 'Kasun', 'Nimali', 'Ravi', 'Dilani', 'Chamath', 'Ishara', 'Tharindu', 'Sachini', 'Ashan', 'Hiruni', 'Malith', 'Nadeesha', 'Pasan', 'Sanduni', 'Yohan', 'Gayan', 'Ruwini', 'Lahiru', 'Tharushi'];
 const LAST = ['Perera', 'Silva', 'Fernando', 'Jayasinghe', 'Wickramasinghe', 'Bandara', 'Dissanayake', 'Gunawardena', 'Herath', 'Rathnayake', 'Senanayake', 'Kumara', 'Weerasinghe'];
-
-export function sampleAtlassian(now) {
-  const rand = sampleRandom(sampleSeed(now, 34));
-  const site = 'https://example-allion.atlassian.net';
-  const users = [];
-  for (let index = 0; index < 236; index += 1) {
-    const name = `${FIRST[index % FIRST.length]} ${LAST[Math.floor(index / FIRST.length) % LAST.length]}`;
-    const email = `${name.toLowerCase().replace(' ', '.')}${index >= FIRST.length * LAST.length ? index : ''}@example.com`;
-    // Most people are active; a long tail hasn't signed in for months.
-    const roll = rand();
-    const lastActive = roll < 0.74 ? rand() * 6 : roll < 0.86 ? 20 + rand() * 50 : 95 + rand() * 200;
-    const access = [{ key: 'jira-software', name: 'Jira', url: site, last_active: isoAt(now, -lastActive) }];
-    if (index % 5 !== 4) access.push({ key: 'confluence', name: 'Confluence', url: `${site}/wiki`, last_active: isoAt(now, -(lastActive + rand() * (index % 3 === 0 ? 120 : 8))) });
-    if (index < 38) access.push({ key: 'jira-servicedesk', name: 'Jira Service Management', url: site, last_active: isoAt(now, -(index > 31 ? 100 + rand() * 60 : rand() * 4)) });
-    users.push({
-      account_id: `5f${(100000 + index).toString(16)}a7c1e2d40069b3f${index}`,
-      account_type: 'atlassian',
-      account_status: 'active',
-      name,
-      picture: '',
-      email,
-      access_billable: true,
-      last_active: access.map((item) => item.last_active).sort().pop(),
-      product_access: access,
-      links: { self: `https://api.atlassian.com/users/5f${(100000 + index).toString(16)}/manage/profile` },
-    });
-  }
-  // GET /admin/v1/orgs/{orgId}/users (paged; one page here)
-  const orgUsers = { data: users, links: { next: null } };
-  // GET /admin/v2/orgs/{orgId}/workspaces
-  const workspace = (typeKey, name, planKey, url) => ({ id: uuid(rand), type: 'workspace', attributes: { name, typeKey, type: 'products', owner: 'org', status: 'online', hostUrl: url, planKey, realm: 'au', createdAt: isoAt(now, -1400) }, links: { self: `https://api.atlassian.com/admin/v2/orgs/sample-org/workspaces/${typeKey}` } });
-  const workspaces = { data: [
-    workspace('jira-software', 'Jira', 'premium', site),
-    workspace('confluence', 'Confluence', 'standard', `${site}/wiki`),
-    workspace('jira-servicedesk', 'Jira Service Management', 'standard', site),
-  ], links: { next: null } };
-  return { orgUsers, workspaces };
-}

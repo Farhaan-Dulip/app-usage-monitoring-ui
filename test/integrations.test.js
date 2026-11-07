@@ -146,8 +146,7 @@ test('vendors without a data connector get a lightweight check with the right au
   const fetchStub = async (url, init = {}) => {
     calls.push({ url: String(url), headers: init.headers || {}, body: init.body ? String(init.body) : '' });
     if (String(url).startsWith('https://zoom.us/oauth/token')) return json({ access_token: 'zoom-at' });
-    if (String(url) === 'https://hub.docker.com/v2/auth/token') return json({ access_token: 'docker-jwt' });
-    if (String(url) === 'https://slack.com/api/auth.test') return json({ ok: false, error: 'invalid_auth' });
+    if (String(url).startsWith('https://api.getpostman.com')) return json({ error: { message: 'Invalid API Key' } }, 401);
     return json({});
   };
   assert.deepEqual(await testCredentials('zoom', { zoomAccountId: 'acc', zoomClientId: 'id', zoomClientSecret: 'sec' }, { fetch: fetchStub }), { checked: true });
@@ -155,16 +154,5 @@ test('vendors without a data connector get a lightweight check with the right au
   assert.match(calls[0].body, /grant_type=account_credentials&account_id=acc/);
   assert.equal(calls[1].headers.Authorization, 'Bearer zoom-at');
 
-  calls.length = 0;
-  await testCredentials('cursor', { cursorApiKey: 'crsr_x' }, { fetch: fetchStub });
-  assert.deepEqual([calls[0].url, calls[0].headers.Authorization], ['https://api.cursor.com/teams/members', `Basic ${Buffer.from('crsr_x:').toString('base64')}`]);
-
-  calls.length = 0;
-  await testCredentials('docker', { dockerUsername: 'farhan', dockerToken: 'dckr_pat', dockerOrg: 'acme' }, { fetch: fetchStub });
-  assert.deepEqual(JSON.parse(calls[0].body), { identifier: 'farhan', secret: 'dckr_pat' });
-  assert.equal(calls[1].headers.Authorization, 'Bearer docker-jwt');
-
-  await assert.rejects(testCredentials('slack', { slackToken: 'xoxp-bad' }, { fetch: fetchStub }), /invalid_auth/);
-  const unchecked = await testCredentials('jetbrains', { jetbrainsCustomerCode: 'c', jetbrainsApiKey: 'k' }, { fetch: fetchStub });
-  assert.equal(unchecked.checked, false);
+  await assert.rejects(testCredentials('postman', { postmanApiKey: 'bad' }, { fetch: fetchStub }), /Invalid API Key/);
 });

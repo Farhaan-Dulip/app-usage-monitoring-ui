@@ -10,22 +10,39 @@ import { AiToolLicenses, LicenseCategoryTabs, PlatformLicenses } from './compone
 import NetworkCanvas from './components/NetworkCanvas';
 import CustomReportBuilder from './components/reports/CustomReportBuilder';
 import AppInventoryIcon from './components/AppInventoryIcon';
-import InventoryAppPicker from './components/InventoryAppPicker';
 import SettingsModal from './components/SettingsModal';
 import RuntimeBreakdown from './components/RuntimeBreakdown';
 import LicenseScopePicker from './components/LicenseScopePicker';
 import AppPlansModal from './components/AppPlansModal';
 import { planSummary } from './utils/appPlans';
 import {
+  NEW_POLICY_RULE,
+  TIME_UNITS,
+  WINDOW_UNITS,
+  buildRuleLicenses,
+  draftToRule,
+  inventoryRuleApps,
+  migrateLicensePolicies,
+  normalizeRule,
+  appPolicies,
+  policyId,
+  policyNameError,
+  ruleApps,
+  savePolicy,
+  selectedPolicy,
+  ruleError,
+  ruleToDraft,
+  ruleToPolicy,
+  vendorRuleFields,
+} from './utils/appRules';
+import InventoryAppPicker from './components/InventoryAppPicker';
+import {
   getPortalClientId,
 } from './utils/clientPreferences';
 import {
   DEFAULT_LICENSE_APP_FORM,
-  DEFAULT_ONBOARD_APP_LICENSE_FORM,
-  DEFAULT_POLICY_REGISTRATION_FORM,
   DEFAULT_RECLAIM_POLICY,
   DEFAULT_USAGE_WINDOW_SECONDS,
-  LICENSE_POLICY_OPTIONS,
   RECLAIMABLE_THRESHOLD_SECONDS,
   TOTAL_MONTHLY_SOFTWARE_SPEND,
 } from './config/licenseDefaults';
@@ -96,8 +113,9 @@ function getExtensionDetectionDefaults(extensionName) {
     return {
       dummy_model: 'Claud Opus-4.6',
       model_signatures: [],
-      identifiers: [],
-      match_all: ['--extensionprocess', 'github.copilot'],
+      // VS Code runs copilot-runtime; other IDEs run the language server.
+      identifiers: ['copilot-runtime', 'copilot-language-server', 'github.copilot'],
+      match_all: [],
     };
   }
   if (normalizedName === 'claude-code') {
@@ -141,8 +159,42 @@ function getExtensionDetectionDefaults(extensionName) {
 
 function buildAgentDeploymentConfig({ pcName, user, licensedApps, inventoryApps = [] }) {
   const applicationItems = licensedApps.filter((app) => app.appType === 'Application');
-  const extensionItems = licensedApps.filter((app) => app.appType === 'Extension');
+  const extensionItems = licensedApps.filter((app) => app.appType === 'Extension' && app.trackExtensions !== false);
   const webUrlItems = inventoryApps.filter((app) => app.appType === 'Web URL');
+  const extensionConfig = (extension) => {
+    const extensionName = extension.processName || extension.appName;
+    const detectionDefaults = getExtensionDetectionDefaults(extensionName);
+    const configuredModelSignatures = extension.model_signatures;
+    const configuredIdentifiers = extension.identifiers;
+    const configuredMatchAll = extension.match_all || extension.matchAll;
+    const resolvedMatchAll =
+      Array.isArray(configuredMatchAll) && configuredMatchAll.length > 0
+        ? configuredMatchAll
+        : detectionDefaults.match_all;
+    const resolvedIdentifiers =
+      Array.isArray(configuredIdentifiers) && configuredIdentifiers.length > 0
+        ? configuredIdentifiers
+        : detectionDefaults.identifiers;
+    return {
+      name: detectionDefaults.canonical_name || extensionName,
+      type: 'agent',
+      subscriptionType: extension.subscriptionType,
+      license_cost: extension.monthlyCost,
+      dummy_model: extension.dummy_model || extension.dummyModel || detectionDefaults.dummy_model,
+      model_signatures:
+        Array.isArray(configuredModelSignatures) && configuredModelSignatures.length > 0
+          ? configuredModelSignatures
+          : detectionDefaults.model_signatures,
+      identifiers:
+        resolvedIdentifiers.length > 0 || resolvedMatchAll.length > 0
+          ? resolvedIdentifiers
+          : [extensionName],
+      match_all: resolvedMatchAll,
+      reclaim_policy: buildReclaimPolicy(extension.policy, {
+        includeTokenThreshold: true,
+      }),
+    };
+  };
 
   return {
     target_pc: pcName,
@@ -160,41 +212,9 @@ function buildAgentDeploymentConfig({ pcName, user, licensedApps, inventoryApps 
             extension.parentApp === app.appName ||
             extension.parentApp === app.processName
         )
-        .map((extension) => {
-          const extensionName = extension.processName || extension.appName;
-          const detectionDefaults = getExtensionDetectionDefaults(extensionName);
-          const configuredModelSignatures = extension.model_signatures;
-          const configuredIdentifiers = extension.identifiers;
-          const configuredMatchAll = extension.match_all || extension.matchAll;
-          const resolvedMatchAll =
-            Array.isArray(configuredMatchAll) && configuredMatchAll.length > 0
-              ? configuredMatchAll
-              : detectionDefaults.match_all;
-          const resolvedIdentifiers =
-            Array.isArray(configuredIdentifiers) && configuredIdentifiers.length > 0
-              ? configuredIdentifiers
-              : detectionDefaults.identifiers;
-          return {
-            name: detectionDefaults.canonical_name || extensionName,
-            type: 'agent',
-            subscriptionType: extension.subscriptionType,
-            license_cost: extension.monthlyCost,
-            dummy_model: extension.dummy_model || extension.dummyModel || detectionDefaults.dummy_model,
-            model_signatures:
-              Array.isArray(configuredModelSignatures) && configuredModelSignatures.length > 0
-                ? configuredModelSignatures
-                : detectionDefaults.model_signatures,
-            identifiers:
-              resolvedIdentifiers.length > 0 || resolvedMatchAll.length > 0
-                ? resolvedIdentifiers
-                : [extensionName],
-            match_all: resolvedMatchAll,
-            reclaim_policy: buildReclaimPolicy(extension.policy, {
-              includeTokenThreshold: true,
-            }),
-          };
-        }),
+        .map(extensionConfig),
     })),
+    extensions: extensionItems.filter((extension) => !extension.parentApp).map(extensionConfig),
     tracked_urls: webUrlItems.map((app) => app.url),
   };
 }
@@ -216,15 +236,36 @@ function buildDeploymentPolicyRecords(deploymentConfig, licensedApps = []) {
   const targetPc = String(deploymentConfig?.target_pc || '').trim().toUpperCase();
   const assignedUser = String(deploymentConfig?.assigned_user || '').trim();
   const generatedAt = deploymentConfig?.generated_at || new Date().toISOString();
-  const findSourceLicense = (appName, parentApp = null) =>
+  const findSourceLicense = (appName, isExtension = false) =>
     licensedApps.find((license) => {
       const licenseName = license.processName || license.appName;
       if (licenseName !== appName) return false;
-      if (!parentApp) return license.appType === 'Application';
-      return license.appType === 'Extension';
+      return license.appType === (isExtension ? 'Extension' : 'Application');
     });
 
-  return (deploymentConfig?.licensed_apps || []).flatMap((app) => {
+  const extensionRecord = (extension, parentApp) => {
+    const extensionName = String(extension?.name || '').trim();
+    if (!targetPc || !extensionName) return null;
+    const sourceExtension = findSourceLicense(extensionName, true);
+
+    return {
+      target_pc: targetPc,
+      assigned_user: assignedUser,
+      generated_at: generatedAt,
+      app_name: extensionName,
+      type: extension?.type || 'agent',
+      parent_app: parentApp,
+      subscriptionType: extension?.subscriptionType || '',
+      license_cost: Number(extension?.license_cost) || 0,
+      reclaim_policy: sourceExtension?.policy
+        ? buildPortalReclaimPolicy(sourceExtension.policy, {
+            includeTokenThreshold: true,
+          })
+        : extension?.reclaim_policy || {},
+    };
+  };
+
+  const appRecords = (deploymentConfig?.licensed_apps || []).flatMap((app) => {
     const appName = String(app?.name || '').trim();
     if (!targetPc || !appName) return [];
     const sourceApp = findSourceLicense(appName);
@@ -244,31 +285,15 @@ function buildDeploymentPolicyRecords(deploymentConfig, licensedApps = []) {
     };
 
     const extensionRecords = (Array.isArray(app?.extensions) ? app.extensions : [])
-      .map((extension) => {
-        const extensionName = String(extension?.name || '').trim();
-        if (!extensionName) return null;
-        const sourceExtension = findSourceLicense(extensionName, appName);
-
-        return {
-          target_pc: targetPc,
-          assigned_user: assignedUser,
-          generated_at: generatedAt,
-          app_name: extensionName,
-          type: extension?.type || 'agent',
-          parent_app: appName,
-          subscriptionType: extension?.subscriptionType || '',
-          license_cost: Number(extension?.license_cost) || 0,
-          reclaim_policy: sourceExtension?.policy
-            ? buildPortalReclaimPolicy(sourceExtension.policy, {
-                includeTokenThreshold: true,
-              })
-            : extension?.reclaim_policy || {},
-        };
-      })
+      .map((extension) => extensionRecord(extension, appName))
       .filter(Boolean);
 
     return [appRecord, ...extensionRecords];
   });
+  const hostlessRecords = (deploymentConfig?.extensions || [])
+    .map((extension) => extensionRecord(extension, null))
+    .filter(Boolean);
+  return [...appRecords, ...hostlessRecords];
 }
 
 const sentEmailSummaryWindowKeys = new Set();
@@ -279,13 +304,10 @@ const pricingMap = {
   'Adobe Creative Cloud': 150,
   Photoshop: 35,
   Illustrator: 35,
-  JetBrains: 29,
-  IntelliJ: 29,
   WebStorm: 16,
   PyCharm: 24,
   'Microsoft 365': 22,
   Office: 22,
-  Slack: 12.5,
   Figma: 15,
   Notion: 10,
   Jira: 8.15,
@@ -295,7 +317,6 @@ const pricingMap = {
   Postman: 19,
   Notepad: 0,
   'Notepad++': 0,
-  Docker: 24,
 };
 
 const fallbackCosts = [150, 95, 72, 49, 29, 18];
@@ -308,8 +329,6 @@ const extensionPricingMap = {
   copilot: 19,
   tabnine: 12,
   codex: 20,
-  cursor: 20,
-  'cursor ai': 20,
   'claude code': 20,
   cline: 15,
   'gemini code assist': 19,
@@ -359,7 +378,6 @@ const appDisplayNames = {
   'notepad.exe': 'Notepad',
   notepad: 'Notepad',
   'notepad++.exe': 'Notepad++',
-  'docker desktop.exe': 'Docker Desktop',
 };
 
 const usageHistory = Array.from({ length: 30 }, (_, index) => {
@@ -377,7 +395,7 @@ const usageHistory = Array.from({ length: 30 }, (_, index) => {
 const engagementVelocity = Array.from({ length: 24 }, (_, hour) => ({
   time: `${String(hour).padStart(2, '0')}:00`,
   adobeCc: Math.max(4, Math.round(12 + Math.sin((hour - 8) / 3) * 18 + (hour >= 9 && hour <= 16 ? 34 : 0))),
-  jetBrains: Math.max(3, Math.round(10 + Math.sin((hour - 10) / 2.6) * 16 + (hour >= 10 && hour <= 18 ? 42 : 0))),
+  figma: Math.max(3, Math.round(10 + Math.sin((hour - 10) / 2.6) * 16 + (hour >= 10 && hour <= 18 ? 42 : 0))),
   vsCode: Math.max(6, Math.round(18 + Math.sin((hour - 7) / 2.8) * 20 + (hour >= 8 && hour <= 19 ? 48 : 0))),
 }));
 
@@ -632,13 +650,13 @@ const utilizationHeatmapHours = ['00', '03', '06', '09', '12', '15', '18', '21']
 const utilizationHeatmapRows = [
   {
     domain: 'Desktop',
-    signal: 'Adobe / JetBrains',
+    signal: 'Adobe / Figma',
     values: [8, 4, 12, 72, 88, 81, 46, 18],
     decision: 'Floating licenses viable outside business hours',
   },
   {
     domain: 'AI Agents',
-    signal: 'Copilot / Cursor',
+    signal: 'Copilot / Claude',
     values: [5, 3, 9, 63, 76, 71, 39, 22],
     decision: 'Seat harvesting strongest for low night and weekend use',
   },
@@ -913,6 +931,18 @@ function readUsageCounters(entry = {}) {
 
 function getUsageCounters(usageMap, appName) {
   return usageMap.get(appName) || createUsageCounters();
+}
+
+// An extension's usage: the Tracker reports one ext:<name>@<host> row per host.
+function extensionUsageCounters(usageMap, name) {
+  const total = { ...getUsageCounters(usageMap, name) };
+  usageMap.forEach((counters, key) => {
+    if (!key.startsWith(`ext:${name}@`)) return;
+    Object.keys(total).forEach((field) => {
+      if (typeof total[field] === 'number') total[field] += Number(counters[field]) || 0;
+    });
+  });
+  return total;
 }
 
 // A license is used through its own program, inside other apps (ext:<app>@<host>)
@@ -1960,13 +1990,10 @@ const STATUS_RANK = { Active: 0, Evaluating: 1, Reclaimable: 2, 'Not installed':
 // Web addresses of common licenses, keyed by licenseKey(subscription name).
 const KNOWN_WEB_APPS = {
   claude: 'https://claude.ai',
-  chatgpt: 'https://chatgpt.com',
-  openai: 'https://chatgpt.com',
   codex: 'https://chatgpt.com/codex',
   githubcopilot: 'https://github.com/copilot',
   copilot: 'https://copilot.microsoft.com',
   figma: 'https://www.figma.com',
-  slack: 'https://app.slack.com',
   zoom: 'https://app.zoom.us',
   postman: 'https://web.postman.co',
   vscode: 'https://vscode.dev',
@@ -1974,8 +2001,6 @@ const KNOWN_WEB_APPS = {
   notion: 'https://www.notion.so',
   miro: 'https://miro.com',
   canva: 'https://www.canva.com',
-  jira: 'https://www.atlassian.com/software/jira',
-  confluence: 'https://www.atlassian.com/software/confluence',
   microsoftteams: 'https://teams.microsoft.com',
   teams: 'https://teams.microsoft.com',
   microsoft365: 'https://www.office.com',
@@ -2013,6 +2038,10 @@ function groupStatus(surfaces) {
 
 const SURFACE_ORDER = { 'Desktop app': 0, Extension: 1, 'Web app': 2 };
 
+function inventoryItemId(appType, name) {
+  return `${appType}-${name}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
 function isAiLicenseGroup(group) {
   if (productSurfaces(group.productId).some((entry) => String(entry.category).startsWith('AI'))) return true;
   return group.surfaces.some((surface) => surface.surface === 'Extension' && surface.type === 'agent' && !surface.host);
@@ -2037,7 +2066,7 @@ function emptySurface(fields) {
   };
 }
 
-function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
+function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = [], inventoryApps = []) {
   const subscriptionFor = (pcName, appName) => {
     const record = deploymentPolicyRecords.find(
       (item) =>
@@ -2085,7 +2114,7 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
       const name = (catalog && PRODUCTS[catalog.product]) || subscriptionFor(pcName, entry.appName) || entry.displayName;
       const key = productKey(catalog) || licenseKey(name);
       groupByApp.set(String(entry.appName).toLowerCase(), { key, name, icon: entry.icon });
-      addSurface(key, name, entry.icon, {
+      const group = addSurface(key, name, entry.icon, {
         ...entry,
         hasAgentExtension: entry.hasAgentExtension || entry.automationWorkedSeconds > 0,
         surface: 'Desktop app',
@@ -2093,6 +2122,9 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
         catalogId: catalog?.id,
         productId: catalog?.product,
       });
+      group.inventoryApp = inventoryApps.find(
+        (app) => String(app.processName).toLowerCase() === String(entry.appName).toLowerCase()
+      );
     });
     const licenseOf = (appName) => groupByApp.get(String(appName || '').toLowerCase());
 
@@ -2102,12 +2134,15 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
       const candidates = [...(extension.subscriptionTypes || []), extension.name];
       const key = productKey(catalog) || findGroup(candidates) || licenseKey(candidates[0]);
       const name = (catalog && PRODUCTS[catalog.product]) || candidates[0];
-      const hosts = extension.parentApps.map(hostName);
-      extension.parentApps.forEach((parent) => noteHost(parent, name));
+      // The hosts it has actually been seen in, from the Tracker.
+      const hostRows = usage.usageByEmbedded.filter((row) => row.appName === extension.name);
+      hostRows.forEach((row) => noteHost(row.host, name));
+      const hosts = hostRows.map((row) => hostName(row.host));
       addSurface(key, name, extension.icon, {
         ...extension,
         surface: 'Extension',
         detail: hosts.length > 0 ? `${extension.name} · used in ${hosts.join(', ')}` : extension.name,
+        lastSeenAt: hostRows.map((row) => row.lastSeenAt).filter(Boolean).sort().at(-1) || extension.lastSeenAt,
         catalogId: catalog?.id,
         productId: catalog?.product,
       });
@@ -2173,9 +2208,15 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
     pcGroups.forEach((group, key) => {
       // A recognised product shows each kind of surface it has; one not seen yet says so.
       const present = new Set(group.surfaces.map((surface) => surface.surface));
+      const { webUrl, trackExtensions } = group.inventoryApp || {};
+      if (webUrl && !present.has('Web app')) {
+        present.add('Web app');
+        group.surfaces.push(emptySurface({ surface: 'Web app', detail: webUrl }));
+      }
       productSurfaces(group.productId).forEach((entry) => {
         const label = catalogSurfaceLabel(entry);
         if (present.has(label)) return;
+        if (label === 'Extension' && trackExtensions === false) return;
         present.add(label);
         group.surfaces.push(
           emptySurface({
@@ -2190,6 +2231,9 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
           })
         );
       });
+      if (trackExtensions === true && !present.has('Extension')) {
+        group.surfaces.push(emptySurface({ surface: 'Extension', detail: 'Any extension' }));
+      }
       // Every license shows its web line.
       if (!present.has('Web app')) {
         group.surfaces.push(
@@ -2229,6 +2273,33 @@ function buildLicenseGroups(deviceUsages, deploymentPolicyRecords = []) {
     });
   });
   return groups;
+}
+
+// A seat below its policy's active time stays in use when its user meets any
+// vendor activity field in the policy (checked by the backend per deployed
+// user). The group keeps the checks so the reason can say which one.
+function applyVendorRuleResults(groups, results = []) {
+  if (results.length === 0) return groups;
+  const lower = (value) => String(value || '').trim().toLowerCase();
+  return groups.map((group) => {
+    const names = new Set([group.name, ...group.surfaces.flatMap((surface) => [surface.appName, surface.name])].map(lower));
+    const result = results.find((item) => lower(item.pcName) === lower(group.pcName) && names.has(lower(item.processName)));
+    if (!result) return group;
+    const met = (result.checks || []).filter((check) => check.met);
+    const described = (check) =>
+      check.kind === 'within'
+        ? `${check.label} ${check.threshold} days (${check.value === 0 ? 'today' : `${check.value} days ago`})`
+        : `${check.label} ${check.value} (needs ${check.threshold})`;
+    const vendorRule = { ...result, metText: met.map(described).join('; ') };
+    if (group.status !== 'Reclaimable' || met.length === 0) return { ...group, vendorRule };
+    return {
+      ...group,
+      vendorRule,
+      status: 'Active',
+      reclaimReason: `Kept by vendor activity: ${vendorRule.metText}${result.mode === 'sample' ? ' (sample data)' : ''}`,
+      savingsOpportunity: 0,
+    };
+  });
 }
 
 const DEVICE_LIVE_MS = 15 * 60 * 1000;
@@ -2313,7 +2384,7 @@ function computeCompletedDecisions({
   });
 
   getUniqueExtensionRules(config.extensions || []).forEach((extension) => {
-    const counters = countersByName.get(extension.name) || createUsageCounters();
+    const counters = extensionUsageCounters(countersByName, extension.name);
     const policy = getStoredReclaimPolicy(
       deploymentPolicyRecords,
       currentPcName,
@@ -2604,7 +2675,7 @@ function computeDeviceUsage({
     if (!config?.extensions) return [];
 
     return getUniqueExtensionRules(config.extensions).map((extension, index) => {
-      const usageCounters = getUsageCounters(accumulatedUsage, extension.name);
+      const usageCounters = extensionUsageCounters(accumulatedUsage, extension.name);
       const isAgentExtension = extension.type === 'agent';
       const automationWorkedSeconds = usageCounters.automationWorkedSeconds;
       const totalRuntimeSeconds = isAgentExtension
@@ -2934,26 +3005,34 @@ export default function App({ user = null, onSignOut = null }) {
   const [completedEvaluationDecisions, setCompletedEvaluationDecisions] = useState(
     readCompletedEvaluationDecisions
   );
-  const [licensePolicies, setLicensePolicies] = useState(LICENSE_POLICY_OPTIONS);
-  const [policyRegistrationForm, setPolicyRegistrationForm] = useState(
-    DEFAULT_POLICY_REGISTRATION_FORM
-  );
-  const [policyRegistrationStatus, setPolicyRegistrationStatus] = useState('');
-  const [editingPolicyName, setEditingPolicyName] = useState('');
+  // The app whose policies the App Rules editor is open on.
+  const [editingRuleAppId, setEditingRuleAppId] = useState('');
+  const [ruleDraft, setRuleDraft] = useState(() => ruleToDraft(NEW_POLICY_RULE));
+  const [appRuleStatus, setAppRuleStatus] = useState('');
+  const [onboardAppId, setOnboardAppId] = useState('');
+  const [onboardPolicyId, setOnboardPolicyId] = useState('');
+  // The policy open in App Rules: an id, '__new__' for a new one, '' when none is open.
+  const [rulePolicyId, setRulePolicyId] = useState('');
+  const [rulePolicyName, setRulePolicyName] = useState('');
+  const [onboardStatus, setOnboardStatus] = useState('');
   const [licensedApps, setLicensedApps] = useState([]);
-  const [onboardedAppLicenses, setOnboardedAppLicenses] = useState([]);
+  // Every inventory app and extension, with the rule that applies to it.
+  const onboardedAppLicenses = useMemo(
+    () => buildRuleLicenses(licensedApps),
+    [licensedApps]
+  );
+  // Policies live on each inventory app now; nothing is saved here any more.
+  const licensePolicies = useMemo(() => [], []);
   const [licenseRequests, setLicenseRequests] = useState([]);
   const [licenseApprovalStatus, setLicenseApprovalStatus] = useState('');
   const [deviceOwners, setDeviceOwners] = useState([]);
   const [deviceOwnerDrafts, setDeviceOwnerDrafts] = useState({});
   const [deviceOwnerStatus, setDeviceOwnerStatus] = useState('');
-  const [onboardAppLicenseForm, setOnboardAppLicenseForm] = useState(
-    DEFAULT_ONBOARD_APP_LICENSE_FORM
-  );
-  const [editingOnboardedLicenseId, setEditingOnboardedLicenseId] = useState('');
   const [licenseAppForm, setLicenseAppForm] = useState(DEFAULT_LICENSE_APP_FORM);
   const [pickedCatalogEntry, setPickedCatalogEntry] = useState(null);
   const [plansAppId, setPlansAppId] = useState('');
+  // A Recognised apps card for an app not in the inventory yet.
+  const [newCatalogApp, setNewCatalogApp] = useState(null);
   const [skippedCompanionIds, setSkippedCompanionIds] = useState(() => new Set());
   const [editingInventoryAppId, setEditingInventoryAppId] = useState('');
   const [licenseOnboardingStatus, setLicenseOnboardingStatus] = useState('');
@@ -3029,9 +3108,9 @@ export default function App({ user = null, onSignOut = null }) {
         if (savedState.lastDeploymentConfig) setLastDeploymentConfig(savedState.lastDeploymentConfig);
         if (Array.isArray(savedState.deploymentPolicyRecords)) setDeploymentPolicyRecords(savedState.deploymentPolicyRecords);
         if (savedState.completedEvaluationDecisions) setCompletedEvaluationDecisions(savedState.completedEvaluationDecisions);
-        if (Array.isArray(savedState.licensePolicies)) setLicensePolicies(savedState.licensePolicies);
-        if (Array.isArray(savedState.licensedApps)) setLicensedApps(savedState.licensedApps);
-        if (Array.isArray(savedState.onboardedAppLicenses)) setOnboardedAppLicenses(savedState.onboardedAppLicenses);
+        if (Array.isArray(savedState.licensedApps)) {
+          setLicensedApps(migrateLicensePolicies(savedState.licensedApps, savedState.onboardedAppLicenses));
+        }
         if (savedState.emailSummaryWindowKey) setEmailSummaryWindowKey(savedState.emailSummaryWindowKey);
         if (savedState.selectedReportTemplateId) setSelectedReportTemplateId(savedState.selectedReportTemplateId);
         if (Array.isArray(savedState.selectedReportDimensions)) setSelectedReportDimensions(savedState.selectedReportDimensions);
@@ -3214,9 +3293,21 @@ export default function App({ user = null, onSignOut = null }) {
     () => allDeviceUsages.flatMap((usage) => usage.usageByApp),
     [allDeviceUsages]
   );
+  // Vendor activity rules the backend checked for each deployed user.
+  const [vendorRuleResults, setVendorRuleResults] = useState([]);
+  useEffect(() => {
+    const load = () =>
+      fetch(`${BACKEND_BASE_URL}/api/vendor-rule-results`)
+        .then((response) => (response.ok ? response.json() : { results: [] }))
+        .then((body) => setVendorRuleResults(body.results || []))
+        .catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const allLicenseGroups = useMemo(
-    () => buildLicenseGroups(allDeviceUsages, deploymentPolicyRecords),
-    [allDeviceUsages, deploymentPolicyRecords]
+    () => applyVendorRuleResults(buildLicenseGroups(allDeviceUsages, deploymentPolicyRecords, licensedApps), vendorRuleResults),
+    [allDeviceUsages, deploymentPolicyRecords, licensedApps, vendorRuleResults]
   );
   // End User Licenses shows all of them, apps only, or AI tools and agents only.
   const [licenseScope, setLicenseScope] = useState('all');
@@ -3830,7 +3921,8 @@ export default function App({ user = null, onSignOut = null }) {
     const agentExtensions = usageByExtension.filter(
       (extension) =>
         extension.type === 'agent' &&
-        extension.parentApps.some((parentApp) => selectedAppNames.has(parentApp))
+        (extension.parentApps.length === 0 ||
+          extension.parentApps.some((parentApp) => selectedAppNames.has(parentApp)))
     );
     const activeLicensedApplications = licensedApplications.filter(
       (entry) => entry.status === 'Active'
@@ -3892,46 +3984,31 @@ export default function App({ user = null, onSignOut = null }) {
     () => ({
       count: onboardedAppLicenses.length,
       monthlyCost: onboardedAppLicenses.reduce(
-        (sum, app) => sum + app.monthlyCost,
+        (sum, app) => sum + (Number(app.monthlyCost) || 0),
         0
       ),
     }),
     [onboardedAppLicenses]
   );
 
-  const registeredPolicySummary = useMemo(
-    () => ({
-      count: licensePolicies.length,
-      fastestDecisionHours: Math.min(
-        ...licensePolicies.map((policy) => getEvaluationWindowSeconds(policy) / 3600)
-      ),
-    }),
-    [licensePolicies]
-  );
+  const appRuleSummary = useMemo(() => {
+    const apps = ruleApps(licensedApps);
+    return {
+      policies: inventoryRuleApps(licensedApps).reduce((sum, app) => sum + appPolicies(app).length, 0),
+      apps: inventoryRuleApps(licensedApps).filter((app) => appPolicies(app).length > 0).length,
+      withoutPolicy: apps.filter((app) => !selectedPolicy(app)).length,
+    };
+  }, [licensedApps]);
 
-  const enterpriseParentAppOptions = useMemo(
-    () =>
-      licensedApps
-        .filter((app) => app.appType === 'Application')
-        .map((app) => app.appName),
-    [licensedApps]
-  );
   // The picked app's other surfaces (desktop app, extension, web) not yet in
-  // the inventory; an extension needs its parent app there, or added now.
+  // the inventory.
   const companionSurfaces = useMemo(() => {
     const entry = pickedCatalogEntry;
     if (!entry?.product || editingInventoryAppId) return [];
     if (entry.appType !== licenseAppForm.appType || entry.appName !== licenseAppForm.appName) return [];
     return productSurfaces(entry.product)
-      .filter((surface) => surface.id !== entry.id && !surface.autoDetected && !inventoryMatch(surface, licensedApps))
-      .map((surface) => ({
-        ...surface,
-        parentReady:
-          surface.appType !== 'Extension' ||
-          enterpriseParentAppOptions.includes(surface.parentApp) ||
-          (entry.appType === 'Application' && entry.appName === surface.parentApp),
-      }));
-  }, [editingInventoryAppId, enterpriseParentAppOptions, licenseAppForm.appName, licenseAppForm.appType, licensedApps, pickedCatalogEntry]);
+      .filter((surface) => surface.id !== entry.id && !surface.autoDetected && !inventoryMatch(surface, licensedApps));
+  }, [editingInventoryAppId, licenseAppForm.appName, licenseAppForm.appType, licensedApps, pickedCatalogEntry]);
 
   const cloudRegionOptions = useMemo(
     () => Array.from(new Set(cloudInventory.map((resource) => resource.region))).sort(),
@@ -4009,7 +4086,7 @@ export default function App({ user = null, onSignOut = null }) {
     };
   }, []);
 
-  // Enterprise Infrastructure Platform (Azure, Snowflake, Datadog, Atlassian):
+  // Enterprise Infrastructure Platform (Azure, Snowflake, Datadog):
   // its monthly forecast and identified savings replace the older placeholder
   // cloud figures in the dashboard totals.
   const [platformStats, setPlatformStats] = useState(null);
@@ -4098,15 +4175,10 @@ export default function App({ user = null, onSignOut = null }) {
     const endUserSamples = [
       { id: 'adobe-harvest', action: 'Harvest 12 idle Adobe licenses', impact: 960, detail: 'Recover design seats with less than 1 hour active runtime' },
       { id: 'figma-downgrade', action: 'Downgrade 4 idle Figma Full seats to View', impact: 180, detail: 'No file activity in 30 days' },
-      { id: 'jetbrains-harvest', action: 'Reassign underused JetBrains seats', impact: 145, detail: 'Shift named seats into a pooled developer allocation' },
       { id: 'zoom-basic', action: 'Move 6 Zoom users with no sign-in in 30 days to Basic', impact: 80, detail: 'Licensed seats nobody has used this month' },
-      { id: 'docker-remove', action: 'Remove 3 Docker members not seen in 30 days', impact: 72, detail: 'Paid organization seats with no Desktop activity' },
-      { id: 'slack-deactivate', action: 'Deactivate 5 inactive billable Slack members', impact: 44, detail: 'No activity in 14 days' },
     ];
     const aiSamples = [
-      { id: 'chatgpt-pool', action: 'Move 4 low-use ChatGPT Enterprise seats to a pooled plan', impact: 240, detail: 'Fewer than 10 messages a month each' },
       { id: 'claude-budget', action: 'Set Claude Code spend limits for 2 users over budget', impact: 180, detail: 'Month-to-date spend above their budget' },
-      { id: 'cursor-remove', action: 'Remove 3 Cursor seats with no requests in 14 days', impact: 120, detail: 'Idle Business seats' },
       { id: 'copilot-downgrade', action: 'Downgrade 5 unused Copilot seats', impact: 100, detail: 'Move inactive users to request-based assignment' },
       { id: 'codex-reclaim', action: 'Reclaim 2 idle Codex seats', impact: 60, detail: 'No Codex turns in 14 days' },
     ];
@@ -4365,36 +4437,6 @@ export default function App({ user = null, onSignOut = null }) {
     setLicenseAppForm((currentForm) => ({
       ...currentForm,
       [name]: value,
-      ...(name === 'appType' && value === 'Application'
-        ? {
-            parentApp: '',
-            subscriptionType: '',
-          }
-        : {}),
-      ...(name === 'appType' && value === 'Web URL'
-        ? {
-            appName: '',
-            processName: '',
-            parentApp: '',
-            subscriptionType: '',
-          }
-        : {}),
-    }));
-  };
-
-  const handleOnboardAppLicenseInputChange = (event) => {
-    const { name, value } = event.target;
-    setOnboardAppLicenseForm((currentForm) => ({
-      ...currentForm,
-      [name]: value,
-    }));
-  };
-
-  const handlePolicyRegistrationInputChange = (event) => {
-    const { name, value } = event.target;
-    setPolicyRegistrationForm((currentForm) => ({
-      ...currentForm,
-      [name]: value,
     }));
   };
 
@@ -4409,7 +4451,7 @@ export default function App({ user = null, onSignOut = null }) {
     }
 
     if (onboardedAppLicenses.length === 0) {
-      setDeployTarget('Onboard at least one app license before deployment.');
+      setDeployTarget('Onboard at least one app before deployment.');
       return;
     }
 
@@ -4420,177 +4462,53 @@ export default function App({ user = null, onSignOut = null }) {
       inventoryApps: licensedApps,
     });
 
+    // The deployment records drive evaluation on the dashboard; the config
+    // goes to the PC's Tracker through the broker.
+    const nextRecords = buildDeploymentPolicyRecords(deploymentConfig, onboardedAppLicenses);
     setIsDeployingAgent(true);
-    setDeployTarget(
-      `Saving deployment policies in UI memory for ${normalizedPcName} with ${onboardedAppLicenses.length} app licenses`
-    );
-
-    window.setTimeout(() => {
-      const nextRecords = buildDeploymentPolicyRecords(
-        deploymentConfig,
-        onboardedAppLicenses
-      );
-      const nextRecordIds = new Set(nextRecords.map(getDeploymentRecordId));
-      setDeploymentPolicyRecords((currentRecords) => [
-        ...currentRecords.filter(
-          (record) => !nextRecordIds.has(getDeploymentRecordId(record))
-        ),
-        ...nextRecords,
-      ]);
-      setIsDeployingAgent(false);
-      setLastDeploymentConfig(deploymentConfig);
-      setDeployTarget(
-        `Deployment policies saved in UI memory for ${normalizedPcName} (${nextRecords.length} records)`
-      );
-      setDeployForm((currentForm) => ({
-        ...currentForm,
-        pcName: '',
-        user: '',
-      }));
-    }, 500);
-  };
-
-  const handleRegisterPolicy = (event) => {
-    event.preventDefault();
-
-    const policyName = policyRegistrationForm.name.trim();
-    const evaluationWindowValue = Number(policyRegistrationForm.evaluationWindowValue);
-    const evaluationWindowUnit = policyRegistrationForm.evaluationWindowUnit;
-    const workedThresholdHours = Number(policyRegistrationForm.workedThresholdHours);
-
-    if (!policyName) {
-      setPolicyRegistrationStatus('Enter a policy name to register.');
-      return;
-    }
-
-    if (
-      !Number.isFinite(evaluationWindowValue) ||
-      evaluationWindowValue < 0.1 ||
-      !Number.isFinite(workedThresholdHours) ||
-      workedThresholdHours < 0.1
-    ) {
-      setPolicyRegistrationStatus('Policy timing values must be at least 0.1.');
-      return;
-    }
-
-    const nextPolicy = {
-      name: policyName,
-      evaluationWindowValue,
-      evaluationWindowUnit,
-      evaluationWindowDays:
-        getPolicyWindowSeconds(evaluationWindowValue, {
-          evaluationWindowUnit,
-        }) /
-        (24 * 60 * 60),
-      workedThresholdHours,
-    };
-
-    const normalizedPolicyName = policyName.toLowerCase();
-    const normalizedEditingPolicyName = editingPolicyName.toLowerCase();
-    const existingPolicyIndex = licensePolicies.findIndex(
-      (policy) => policy.name.toLowerCase() === normalizedPolicyName
-    );
-    const editingPolicyIndex = licensePolicies.findIndex(
-      (policy) => policy.name.toLowerCase() === normalizedEditingPolicyName
-    );
-
-    if (
-      editingPolicyName &&
-      existingPolicyIndex !== -1 &&
-      existingPolicyIndex !== editingPolicyIndex
-    ) {
-      setPolicyRegistrationStatus(`${policyName} policy already exists.`);
-      return;
-    }
-
-    setLicensePolicies((currentPolicies) => {
-      const existingIndex = currentPolicies.findIndex(
-        (policy) => policy.name.toLowerCase() === normalizedPolicyName
-      );
-      const editingIndex = currentPolicies.findIndex(
-        (policy) => policy.name.toLowerCase() === normalizedEditingPolicyName
-      );
-
-      if (editingPolicyName && editingIndex !== -1) {
-        return currentPolicies.map((policy, index) =>
-          index === editingIndex ? nextPolicy : policy
+    setDeployTarget(`Sending the tracker config to ${normalizedPcName}…`);
+    fetch(`${BACKEND_BASE_URL}/api/tracker-deployments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Client-Id': portalClientId },
+      body: JSON.stringify({ pcName: normalizedPcName, userEmail: assignedUser, config: deploymentConfig }),
+    })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `Deployment failed with status ${response.status}`);
+        return body;
+      })
+      .then((result) => {
+        const nextRecordIds = new Set(nextRecords.map(getDeploymentRecordId));
+        setDeploymentPolicyRecords((currentRecords) => [
+          ...currentRecords.filter((record) => !nextRecordIds.has(getDeploymentRecordId(record))),
+          ...nextRecords,
+        ]);
+        setLastDeploymentConfig(deploymentConfig);
+        setDeployTarget(
+          result.deviceFound
+            ? `Tracker config for ${normalizedPcName} sent (${deploymentConfig.licensed_apps.length} apps). The Tracker applies it within seconds, or when the PC is next online.`
+            : `${normalizedPcName} hasn't connected yet. Its tracker config waits and is sent as soon as the PC reports in.`
         );
-      }
-
-      if (existingIndex === -1) {
-        return [...currentPolicies, nextPolicy];
-      }
-
-      return currentPolicies.map((policy, index) =>
-        index === existingIndex ? { ...policy, ...nextPolicy } : policy
-      );
-    });
-    setOnboardedAppLicenses((currentApps) =>
-      currentApps.map((app) =>
-        app.policy.name.toLowerCase() ===
-        (editingPolicyName || nextPolicy.name).toLowerCase()
-          ? { ...app, policy: nextPolicy }
-          : app
-      )
-    );
-    setOnboardAppLicenseForm((currentForm) => ({
-      ...currentForm,
-      policyName: nextPolicy.name,
-    }));
-    setPolicyRegistrationStatus(
-      editingPolicyName
-        ? `${nextPolicy.name} policy updated.`
-        : `${nextPolicy.name} policy registered.`
-    );
-    setPolicyRegistrationForm(DEFAULT_POLICY_REGISTRATION_FORM);
-    setEditingPolicyName('');
+        setDeployForm((currentForm) => ({ ...currentForm, pcName: '', user: '' }));
+        loadTrackerDeployments();
+      })
+      .catch((err) => setDeployTarget(`Couldn't deploy to ${normalizedPcName}: ${err.message}`))
+      .finally(() => setIsDeployingAgent(false));
   };
 
-  const handleEditPolicy = (policy) => {
-    setEditingPolicyName(policy.name);
-    setPolicyRegistrationForm({
-      name: policy.name,
-      evaluationWindowValue: String(
-        policy.evaluationWindowValue ?? policy.evaluationWindowDays ?? 30
-      ),
-      evaluationWindowUnit: policy.evaluationWindowUnit || 'Days',
-      workedThresholdHours: String(policy.workedThresholdHours),
-    });
-    setPolicyRegistrationStatus(`Editing ${policy.name} policy.`);
-  };
-
-  const handleRemovePolicy = (policyName) => {
-    if (licensePolicies.length <= 1) {
-      setPolicyRegistrationStatus('Keep at least one policy registered.');
-      return;
-    }
-
-    const remainingPolicies = licensePolicies.filter(
-      (policy) => policy.name !== policyName
-    );
-    const fallbackPolicy = remainingPolicies[0];
-
-    setLicensePolicies(remainingPolicies);
-    setOnboardedAppLicenses((currentApps) =>
-      currentApps.map((app) =>
-        app.policy.name === policyName ? { ...app, policy: fallbackPolicy } : app
-      )
-    );
-    setOnboardAppLicenseForm((currentForm) => ({
-      ...currentForm,
-      policyName:
-        currentForm.policyName === policyName
-          ? fallbackPolicy.name
-          : currentForm.policyName,
-    }));
-
-    if (editingPolicyName === policyName) {
-      setPolicyRegistrationForm(DEFAULT_POLICY_REGISTRATION_FORM);
-      setEditingPolicyName('');
-    }
-
-    setPolicyRegistrationStatus(`${policyName} policy removed.`);
-  };
+  // Each PC's latest Deploy Tracker push and whether it has gone out.
+  const [trackerDeployments, setTrackerDeployments] = useState([]);
+  const loadTrackerDeployments = useCallback(() => {
+    fetch(`${BACKEND_BASE_URL}/api/tracker-deployments`)
+      .then((response) => (response.ok ? response.json() : { deployments: [] }))
+      .then((body) => setTrackerDeployments(body.deployments || []))
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    loadTrackerDeployments();
+    const timer = window.setInterval(loadTrackerDeployments, 15000);
+    return () => window.clearInterval(timer);
+  }, [loadTrackerDeployments]);
 
   // Back from "Sign in with GitHub" (Connect): open the inventory page and say how it went.
   useEffect(() => {
@@ -4611,7 +4529,6 @@ export default function App({ user = null, onSignOut = null }) {
     const appName = licenseAppForm.appName.trim();
     const processName = licenseAppForm.processName.trim();
     const url = licenseAppForm.url.trim();
-    const monthlyCost = Number(licenseAppForm.monthlyCost);
     const owner = licenseAppForm.owner.trim();
     const ownerEmail = licenseAppForm.ownerEmail.trim();
     const appType = licenseAppForm.appType;
@@ -4625,11 +4542,6 @@ export default function App({ user = null, onSignOut = null }) {
 
     if (appType !== 'Web URL' && !appName) {
       setLicenseOnboardingStatus('Enter an app name to add inventory.');
-      return;
-    }
-
-    if (!Number.isFinite(monthlyCost) || monthlyCost <= 0) {
-      setLicenseOnboardingStatus('Enter a valid monthly license cost.');
       return;
     }
 
@@ -4648,24 +4560,21 @@ export default function App({ user = null, onSignOut = null }) {
       return;
     }
 
-    if (appType === 'Extension' && !parentApp) {
-      setLicenseOnboardingStatus('Choose a parent app for this extension.');
-      return;
-    }
-
     if (appType === 'Extension' && !subscriptionType) {
       setLicenseOnboardingStatus('Enter the extension subscription type.');
       return;
     }
 
-    const inventoryId = (type, name) => `${type}-${name}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const productName = companionSurfaces.length > 0 ? PRODUCTS[pickedCatalogEntry.product] : '';
+    const nextId = inventoryItemId(appType, appType === 'Web URL' ? url : appName);
+    const currentItem = licensedApps.find((app) => app.id === (editingInventoryAppId || nextId));
     const nextApp = {
-      id: inventoryId(appType, appType === 'Web URL' ? url : appName),
+      id: nextId,
       appName: appType === 'Web URL' ? url : appName,
       processName,
       url,
-      monthlyCost,
+      // Cost comes from the app's plans.
+      monthlyCost: currentItem?.monthlyCost ?? 0,
       owner,
       ownerEmail,
       appType,
@@ -4675,9 +4584,9 @@ export default function App({ user = null, onSignOut = null }) {
     };
     // Other surfaces of the same license: the cost stays on the main item.
     const companionItems = companionSurfaces
-      .filter((surface) => surface.parentReady && !skippedCompanionIds.has(surface.id))
+      .filter((surface) => !skippedCompanionIds.has(surface.id))
       .map((surface) => ({
-        id: inventoryId(surface.appType, surface.appType === 'Web URL' ? surface.url : surface.appName),
+        id: inventoryItemId(surface.appType, surface.appType === 'Web URL' ? surface.url : surface.appName),
         appName: surface.appType === 'Web URL' ? surface.url : surface.appName,
         processName: surface.processName || '',
         url: surface.url || '',
@@ -4685,7 +4594,7 @@ export default function App({ user = null, onSignOut = null }) {
         owner,
         ownerEmail,
         appType: surface.appType,
-        parentApp: surface.parentApp || '',
+        parentApp: '',
         subscriptionType: productName,
         bundledWith: nextApp.id,
         onboardedAt: nextApp.onboardedAt,
@@ -4712,13 +4621,6 @@ export default function App({ user = null, onSignOut = null }) {
       const known = new Set(merged.map((app) => app.id));
       return [...merged, ...companionItems.filter((item) => !known.has(item.id))];
     });
-    setOnboardedAppLicenses((currentLicenses) =>
-      currentLicenses.map((app) =>
-        app.id === editingInventoryAppId || app.id === nextApp.id
-          ? { ...app, ...nextApp, policy: app.policy }
-          : app
-      )
-    );
     setLicenseOnboardingStatus(
       `${appName} ${appType.toLowerCase()} ${
         editingInventoryAppId ? 'updated in' : 'added to'
@@ -4736,84 +4638,47 @@ export default function App({ user = null, onSignOut = null }) {
     if (appType !== 'Web URL' && !processName) setPlansAppId(nextApp.id);
   };
 
-  const handleOnboardAppLicense = (event) => {
-    event.preventDefault();
+  const applyCatalogEntry = (entry) => {
+    setPickedCatalogEntry(entry);
+    setSkippedCompanionIds(new Set());
+    setLicenseAppForm((currentForm) => ({
+      ...currentForm,
+      appType: entry.appType,
+      appName: entry.appName,
+      processName: entry.processName || '',
+      ...(entry.appType === 'Extension'
+        ? { parentApp: '', subscriptionType: entry.subscriptionType || currentForm.subscriptionType }
+        : {}),
+    }));
+    setLicenseOnboardingStatus('');
+  };
 
-    const inventoryItem = licensedApps.find(
-      (app) => app.id === onboardAppLicenseForm.appId
-    );
-    const selectedPolicy =
-      licensePolicies.find(
-        (policy) => policy.name === onboardAppLicenseForm.policyName
-      ) || licensePolicies[0];
-
-    if (!inventoryItem) {
-      setLicenseOnboardingStatus('Choose an app from Enterprise Apps Inventory.');
+  // A catalog card opens the app's plans over the catalog, for a new app as a
+  // draft that saving adds.
+  const handleSelectCatalogApp = (entry) => {
+    const existing = inventoryMatch(entry, licensedApps);
+    if (existing) {
+      openAppPlans(existing);
       return;
     }
-
-    const nextLicense = {
-      ...inventoryItem,
-      policy: selectedPolicy,
-      onboardedAt: new Date().toISOString(),
-    };
-    // Surfaces added with this item (an extension in another app) share its
-    // policy; web items deploy from the inventory directly.
-    const bundledLicenses = licensedApps
-      .filter((app) => app.bundledWith === inventoryItem.id && app.appType !== 'Web URL')
-      .map((app) => ({ ...app, policy: selectedPolicy, onboardedAt: nextLicense.onboardedAt }));
-
-    setOnboardedAppLicenses((currentLicenses) => {
-      const existingIndex = currentLicenses.findIndex(
-        (app) => app.id === (editingOnboardedLicenseId || inventoryItem.id)
-      );
-
-      const updated =
-        existingIndex === -1
-          ? [...currentLicenses, nextLicense]
-          : currentLicenses.map((app, index) => (index === existingIndex ? nextLicense : app));
-      const bundledIds = new Set(bundledLicenses.map((app) => app.id));
-      return [...updated.filter((app) => !bundledIds.has(app.id)), ...bundledLicenses];
+    setNewCatalogApp({
+      id: inventoryItemId(entry.appType, entry.appName),
+      appName: entry.appName,
+      processName: entry.processName || '',
+      url: entry.url || '',
+      appType: entry.appType,
+      parentApp: '',
+      subscriptionType: PRODUCTS[entry.product] || entry.subscriptionType || '',
     });
-    setLicenseOnboardingStatus(
-      `${inventoryItem.appName} license ${
-        editingOnboardedLicenseId ? 'updated' : 'onboarded'
-      } with ${selectedPolicy.name} policy${
-        bundledLicenses.length > 0
-          ? `, with ${bundledLicenses.map((app) => app.appName).join(' and ')}`
-          : ''
-      }.`
-    );
-    setOnboardAppLicenseForm({
-      ...DEFAULT_ONBOARD_APP_LICENSE_FORM,
-      policyName: selectedPolicy.name,
-    });
-    setEditingOnboardedLicenseId('');
   };
 
-  const handleEditOnboardedLicense = (app) => {
-    setEditingOnboardedLicenseId(app.id);
-    setOnboardAppLicenseForm({
-      appId: app.id,
-      policyName: app.policy.name,
-    });
-    setLicenseOnboardingStatus(`Editing ${app.appName} license.`);
-  };
-
-  const handleRemoveOnboardedLicense = (appId) => {
-    const removedLicense = onboardedAppLicenses.find((app) => app.id === appId);
-    setOnboardedAppLicenses((currentLicenses) =>
-      currentLicenses.filter((app) => app.id !== appId)
-    );
-
-    if (editingOnboardedLicenseId === appId) {
-      setEditingOnboardedLicenseId('');
-      setOnboardAppLicenseForm(DEFAULT_ONBOARD_APP_LICENSE_FORM);
-    }
-
-    setLicenseOnboardingStatus(
-      `${removedLicense?.appName || 'App'} license removed.`
-    );
+  const handleAddNewCatalogApp = (changes) => {
+    setLicensedApps((currentApps) => [
+      ...currentApps,
+      { monthlyCost: 0, owner: '', ownerEmail: '', ...newCatalogApp, ...changes, onboardedAt: new Date().toISOString() },
+    ]);
+    setLicenseOnboardingStatus(`${newCatalogApp.appName} added to Enterprise Apps Inventory. Add its owner with the edit button.`);
+    setNewCatalogApp(null);
   };
 
   // Bundled surfaces share the main app's plans.
@@ -4825,8 +4690,131 @@ export default function App({ user = null, onSignOut = null }) {
   const handleSaveAppPlans = (changes) => {
     const applyChanges = (app) => (app.id === plansAppId ? { ...app, ...changes } : app);
     setLicensedApps((currentApps) => currentApps.map(applyChanges));
-    setOnboardedAppLicenses((currentLicenses) => currentLicenses.map(applyChanges));
     setPlansAppId('');
+  };
+
+  // Onboard Apps: which inventory apps the tracker watches on users' PCs, and
+  // the policy each is evaluated with.
+  const onboardApp = licensedApps.find((item) => item.id === onboardAppId) || null;
+
+  const pickOnboardApp = (appId) => {
+    const app = licensedApps.find((item) => item.id === appId);
+    setOnboardStatus('');
+    setOnboardAppId(appId);
+    setOnboardPolicyId(app?.policyId || appPolicies(app)[0]?.id || '');
+  };
+
+  const handleOnboardApp = (event) => {
+    event.preventDefault();
+    if (!onboardApp) {
+      setOnboardStatus('Choose an app from Enterprise Apps Inventory.');
+      return;
+    }
+    const policy = appPolicies(onboardApp).find((item) => item.id === onboardPolicyId) || null;
+    if (!policy) {
+      setOnboardStatus(`Create a policy for ${onboardApp.appName} in App Rules first.`);
+      return;
+    }
+    const bundled = licensedApps.filter((item) => item.bundledWith === onboardApp.id && item.appType !== 'Web URL');
+    const wasOnboarded = Boolean(onboardApp.onboarded);
+    setLicensedApps((currentApps) =>
+      currentApps.map((item) => (item.id === onboardApp.id ? { ...item, onboarded: true, policyId: policy.id } : item))
+    );
+    setOnboardStatus(
+      `${onboardApp.appName} ${wasOnboarded ? 'updated' : 'onboarded'}${
+        bundled.length > 0 && !wasOnboarded ? `, with ${bundled.map((item) => item.appName).join(' and ')}` : ''
+      }, using the ${policy.name} policy.`
+    );
+    setOnboardAppId('');
+    setOnboardPolicyId('');
+  };
+
+  const handleRemoveOnboardedApp = (appId) => {
+    const app = licensedApps.find((item) => item.id === appId);
+    setLicensedApps((currentApps) => currentApps.map((item) => (item.id === appId ? { ...item, onboarded: false } : item)));
+    if (onboardAppId === appId) setOnboardAppId('');
+    setOnboardStatus(`${app?.appName || 'App'} is no longer tracked.`);
+  };
+
+  // App Rules: named policies per app.
+  const ruleApp = licensedApps.find((item) => item.id === editingRuleAppId) || null;
+  const ruleAppVendorFields = ruleApp ? vendorRuleFields(findCatalogSurface(ruleApp)?.product) : [];
+  const NEW_POLICY = '__new__';
+
+  const loadRuleForm = (appId, nextPolicyId) => {
+    const app = licensedApps.find((item) => item.id === appId);
+    const policy = appPolicies(app).find((item) => item.id === nextPolicyId);
+    setEditingRuleAppId(appId);
+    setRulePolicyId(nextPolicyId);
+    setRulePolicyName(policy?.name || '');
+    setRuleDraft(ruleToDraft(policy?.rule || NEW_POLICY_RULE));
+    setAppRuleStatus('');
+  };
+
+  // Picking an app opens its first policy, or a new one when it has none.
+  const selectRuleApp = (appId) => {
+    const app = licensedApps.find((item) => item.id === appId);
+    loadRuleForm(appId, appPolicies(app)[0]?.id || NEW_POLICY);
+  };
+
+  const handleRuleDraftChange = (event) => {
+    const { name, value } = event.target;
+    setAppRuleStatus('');
+    setRuleDraft((current) => ({ ...current, [name]: value }));
+  };
+
+  const handleVendorRuleChange = (fieldId, value) => {
+    setAppRuleStatus('');
+    setRuleDraft((current) => ({ ...current, vendor: { ...current.vendor, [fieldId]: value } }));
+  };
+
+  const handleSaveRuleForm = (event) => {
+    event.preventDefault();
+    if (!editingRuleAppId) return;
+    const rule = draftToRule(ruleDraft, ruleAppVendorFields);
+    const problem = ruleError(rule);
+    if (problem) {
+      setAppRuleStatus(problem);
+      return;
+    }
+    const isNew = rulePolicyId === NEW_POLICY;
+    const nameProblem = policyNameError(ruleApp, rulePolicyName, isNew ? '' : rulePolicyId);
+    if (nameProblem) {
+      setAppRuleStatus(nameProblem);
+      return;
+    }
+    const savedId = isNew ? policyId(rulePolicyName) : rulePolicyId;
+    setLicensedApps((currentApps) =>
+      currentApps.map((item) =>
+        item.id === ruleApp.id ? savePolicy(item, { id: savedId, name: rulePolicyName, rule: normalizeRule(rule) }) : item
+      )
+    );
+    setAppRuleStatus(`${ruleApp.appName}: ${rulePolicyName.trim()} policy ${isNew ? 'created' : 'saved'}.`);
+    setEditingRuleAppId('');
+    setRulePolicyId('');
+  };
+
+  // A policy an onboarded app is using stays until the app is moved to another.
+  const handleRemovePolicy = (appId, removedId) => {
+    const app = licensedApps.find((item) => item.id === appId);
+    const policy = appPolicies(app).find((item) => item.id === removedId);
+    if (app?.onboarded && app.policyId === removedId) {
+      setAppRuleStatus(`${app.appName} is onboarded with ${policy?.name}. Pick another policy for it in Onboard Apps first.`);
+      return;
+    }
+    setLicensedApps((currentApps) =>
+      currentApps.map((item) =>
+        item.id === appId
+          ? {
+              ...item,
+              policies: appPolicies(item).filter((entry) => entry.id !== removedId),
+              policyId: item.policyId === removedId ? '' : item.policyId,
+            }
+          : item
+      )
+    );
+    if (editingRuleAppId === appId && rulePolicyId === removedId) setEditingRuleAppId('');
+    setAppRuleStatus(`${app?.appName || 'App'}: ${policy?.name || 'policy'} removed.`);
   };
 
   const handleEditInventoryApp = (app) => {
@@ -4835,9 +4823,8 @@ export default function App({ user = null, onSignOut = null }) {
       appName: app.appType === 'Web URL' ? '' : app.appName,
       processName: app.processName,
       url: app.url || '',
-      monthlyCost: String(app.monthlyCost),
-      owner: app.owner,
-      ownerEmail: app.ownerEmail,
+      owner: app.owner || '',
+      ownerEmail: app.ownerEmail || '',
       appType: app.appType,
       parentApp: app.parentApp || '',
       subscriptionType: app.subscriptionType || '',
@@ -4848,19 +4835,13 @@ export default function App({ user = null, onSignOut = null }) {
   const handleRemoveInventoryApp = (appId) => {
     const removedApp = licensedApps.find((app) => app.id === appId);
     setLicensedApps((currentApps) => currentApps.filter((app) => app.id !== appId));
-    setOnboardedAppLicenses((currentLicenses) =>
-      currentLicenses.filter((app) => app.id !== appId)
-    );
 
     if (editingInventoryAppId === appId) {
       setEditingInventoryAppId('');
       setLicenseAppForm(DEFAULT_LICENSE_APP_FORM);
     }
 
-    if (editingOnboardedLicenseId === appId) {
-      setEditingOnboardedLicenseId('');
-      setOnboardAppLicenseForm(DEFAULT_ONBOARD_APP_LICENSE_FORM);
-    }
+    if (editingRuleAppId === appId) setEditingRuleAppId('');
 
     setLicenseOnboardingStatus(
       `${removedApp?.appName || 'Inventory item'} removed from inventory.`
@@ -5171,6 +5152,12 @@ export default function App({ user = null, onSignOut = null }) {
                       >
                         {group.status}
                       </span>
+                      {group.vendorRule?.metText && (
+                        <small className="license-vendor-rule">
+                          Vendor activity: {group.vendorRule.metText}
+                          {group.vendorRule.mode === 'sample' ? ' · sample data' : ''}
+                        </small>
+                      )}
                     </td>
                     <td><RuntimeBreakdown entry={group} /></td>
                     <td className="cost-impact-value">-{formatCurrency(group.monthlyCost)}</td>
@@ -5440,7 +5427,7 @@ export default function App({ user = null, onSignOut = null }) {
 
           <section className="savings-category-grid">
             {[
-              ['platform', 'Enterprise Infra Platform', 'Idle capacity, orphaned resources and commitments across Azure, Snowflake, Datadog and Atlassian.'],
+              ['platform', 'Enterprise Infra Platform', 'Idle capacity, orphaned resources and commitments across Azure, Snowflake and Datadog.'],
               ['endUser', 'End User Apps', 'Idle and underused seats in the apps people use.'],
               ['ai', 'AI Tools & Agent', 'Idle AI seats, low-use plans and spend over budget.'],
             ].map(([key, title, description]) => (
@@ -6025,8 +6012,8 @@ export default function App({ user = null, onSignOut = null }) {
                         activeDot={{ r: 6, stroke: '#ffffff', strokeWidth: 2 }}
                       />
                       <Line
-                        dataKey="jetBrains"
-                        name="JetBrains"
+                        dataKey="figma"
+                        name="Figma"
                         type="monotone"
                         stroke="#8e44ad"
                         strokeWidth={2.4}
@@ -6434,19 +6421,18 @@ export default function App({ user = null, onSignOut = null }) {
               <small>{fleetSummary.activeLicenses} expensive licenses detected</small>
             </article>
             <article className="summary-card summary-card-success">
-              <span>Onboarded Apps</span>
+              <span>Tracked Apps</span>
               <strong>{onboardedLicenseSummary.count}</strong>
               <small>
-                {formatCurrency(onboardedLicenseSummary.monthlyCost)} monthly policy scope
+                {formatCurrency(onboardedLicenseSummary.monthlyCost)} monthly in scope
               </small>
             </article>
             <article className="summary-card">
-              <span>Registered Policies</span>
-              <strong>{registeredPolicySummary.count}</strong>
+              <span>Policies</span>
+              <strong>{appRuleSummary.policies}</strong>
               <small>
-                Fastest reclaim decision in {formatRuntime(
-                  registeredPolicySummary.fastestDecisionHours * 60 * 60
-                )}
+                Across {appRuleSummary.apps} {appRuleSummary.apps === 1 ? 'app' : 'apps'}
+                {appRuleSummary.withoutPolicy > 0 ? ` · ${appRuleSummary.withoutPolicy} onboarded without a policy` : ''}
               </small>
             </article>
           </section>
@@ -6476,11 +6462,11 @@ export default function App({ user = null, onSignOut = null }) {
                 />
               </label>
               <label>
-                <span>Assigned User</span>
+                <span>User Email</span>
                 <input
                   name="user"
-                  placeholder="User name"
-                  type="text"
+                  placeholder="name@alliontechnologies.com"
+                  type="email"
                   value={deployForm.user}
                   onChange={handleDeployInputChange}
                 />
@@ -6503,11 +6489,52 @@ export default function App({ user = null, onSignOut = null }) {
                 )}
               </button>
             </form>
+            {trackerDeployments.length > 0 && (
+              <div className="table-wrap tracker-deployment-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>PC</th>
+                      <th>User Email</th>
+                      <th>Apps</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...trackerDeployments]
+                      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                      .map((deployment) => {
+                        const status = {
+                          sent: { label: 'Sent to tracker', className: 'status-active' },
+                          pending: { label: 'Sending…', className: 'status-observing' },
+                          waiting_device: { label: 'Waiting for PC to connect', className: 'status-neutral' },
+                          superseded: { label: 'Replaced by a newer deployment', className: 'status-neutral' },
+                        }[deployment.status] || { label: deployment.status, className: 'status-neutral' };
+                        return (
+                          <tr key={deployment.pcName}>
+                            <td><strong>{deployment.pcName}</strong></td>
+                            <td>{deployment.userEmail || '—'}</td>
+                            <td>{deployment.apps.join(', ') || '—'}</td>
+                            <td>
+                              <span className={`status-badge ${status.className}`}>{status.label}</span>
+                              {deployment.sentAt && (
+                                <small className="tracker-deployment-time">
+                                  {new Date(deployment.sentAt).toLocaleString()}
+                                </small>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {lastDeploymentConfig && (
               <div className="agent-config-preview">
                 <div className="agent-config-preview-header">
                   <div>
-                    <h3>Queued Tracker Config</h3>
+                    <h3>Last Tracker Config Sent</h3>
                     <p>
                       Generated config includes{' '}
                       {lastDeploymentConfig.licensed_apps.length} licensed app
@@ -6525,226 +6552,267 @@ export default function App({ user = null, onSignOut = null }) {
             )}
           </section>
 
-          <section className="panel license-onboarding-panel">
+          <section className="panel app-rules-panel">
             <div className="panel-header">
               <div>
-                <h2>Onboard App License</h2>
-                <p>Select an inventory app and attach the reclaim policy that will be sent with the tracker config.</p>
+                <h2>Onboard Apps</h2>
+                <p>Choose which inventory apps the tracker watches on users’ PCs, and the policy each is evaluated with.</p>
               </div>
-              {licenseOnboardingStatus && (
-                <span className="deployment-status">{licenseOnboardingStatus}</span>
-              )}
+              {onboardStatus && <span className="deployment-status">{onboardStatus}</span>}
             </div>
-            <form
-              className="deploy-form app-license-onboarding-form"
-              onSubmit={handleOnboardAppLicense}
-            >
+            <form className="deploy-form app-license-onboarding-form" onSubmit={handleOnboardApp}>
               <label>
                 <span>App Name</span>
-                <InventoryAppPicker
-                  apps={licensedApps.filter((app) => app.appType !== 'Web URL')}
-                  value={onboardAppLicenseForm.appId}
-                  onChange={(appId) => handleOnboardAppLicenseInputChange({ target: { name: 'appId', value: appId } })}
-                />
+                <InventoryAppPicker apps={inventoryRuleApps(licensedApps)} value={onboardAppId} onChange={pickOnboardApp} />
               </label>
               <label>
                 <span>Policy</span>
                 <select
-                  name="policyName"
-                  value={onboardAppLicenseForm.policyName}
-                  onChange={handleOnboardAppLicenseInputChange}
+                  disabled={!onboardApp}
+                  value={onboardPolicyId}
+                  onChange={(event) => {
+                    setOnboardStatus('');
+                    setOnboardPolicyId(event.target.value);
+                  }}
                 >
-                  {licensePolicies.map((policy) => (
-                    <option key={policy.name}>{policy.name}</option>
+                  {onboardApp && appPolicies(onboardApp).length === 0 && <option value="">No policies yet</option>}
+                  {appPolicies(onboardApp).map((policy) => (
+                    <option key={policy.id} value={policy.id}>{policy.name}</option>
                   ))}
                 </select>
               </label>
               <button className="deploy-agent-button" type="submit">
                 <span className="action-symbol">+</span>
-                {editingOnboardedLicenseId ? 'Save License' : 'Onboard License'}
+                {onboardApp?.onboarded ? 'Update App' : 'Onboard App'}
               </button>
             </form>
-
-            {onboardedAppLicenses.length > 0 && (
+            {ruleApps(licensedApps).length > 0 && (
               <div className="table-wrap onboarded-license-list">
                 <table>
                   <thead>
                     <tr>
-                      <th>Licensed App</th>
-                      <th>Type</th>
+                      <th>Onboarded App</th>
+                      <th>Policy</th>
                       <th>Monthly Cost</th>
-                      <th>Attached Policy</th>
-                      <th>Threshold</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {onboardedAppLicenses.map((app) => (
-                      <tr key={app.id}>
-                        <td>
-                          <div className="device-identity">
-                            <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
-                            <div>
-                              <strong>{app.appName}</strong>
-                              <span>{app.appType}</span>
+                    {ruleApps(licensedApps).map((app) => {
+                      const bundled = licensedApps.filter((item) => item.bundledWith === app.id);
+                      const policy = selectedPolicy(app);
+                      return (
+                        <tr key={app.id}>
+                          <td>
+                            <div className="device-identity">
+                              <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
+                              <div>
+                                <strong>{app.appName}</strong>
+                                <span>
+                                  {app.appType === 'Extension' ? 'Extension' : 'Desktop app'}
+                                  {bundled.length > 0 ? ` · with ${bundled.map((item) => item.appName).join(', ')}` : ''}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td>{app.appType}</td>
-                        <td>{formatCurrency(app.monthlyCost)}</td>
-                        <td>{app.policy.name}</td>
-                        <td>
-                          {formatPolicyWindowValue(
-                            app.policy.workedThresholdHours,
-                            app.policy
-                          )}{' '}
-                          in{' '}
-                          {formatEvaluationWindow(app.policy)}
-                        </td>
-                        <td>
-                          <div className="policy-actions">
-                            <button
-                              aria-label={`Edit ${app.appName} license`}
-                              className="policy-icon-button policy-icon-button-edit"
-                              title="Edit license"
-                              type="button"
-                              onClick={() => handleEditOnboardedLicense(app)}
-                            >
-                              <span aria-hidden="true">✎</span>
-                            </button>
-                            <button
-                              aria-label={`Remove ${app.appName} license`}
-                              className="policy-icon-button policy-icon-button-remove"
-                              title="Remove license"
-                              type="button"
-                              onClick={() => handleRemoveOnboardedLicense(app.id)}
-                            >
-                              <span aria-hidden="true">×</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className={policy ? undefined : 'app-rules-missing'}>{policy ? policy.name : 'No policy: not tracked'}</td>
+                          <td>{formatCurrency(Number(app.monthlyCost) || 0)}</td>
+                          <td>
+                            <div className="policy-actions">
+                              <button
+                                aria-label={`Change ${app.appName} policy`}
+                                className="policy-icon-button policy-icon-button-edit"
+                                title="Change policy"
+                                type="button"
+                                onClick={() => pickOnboardApp(app.id)}
+                              >
+                                <span aria-hidden="true">✎</span>
+                              </button>
+                              <button
+                                aria-label={`Stop tracking ${app.appName}`}
+                                className="policy-icon-button policy-icon-button-remove"
+                                title="Stop tracking"
+                                type="button"
+                                onClick={() => handleRemoveOnboardedApp(app.id)}
+                              >
+                                <span aria-hidden="true">×</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
           </section>
 
-          <section className="panel policy-registration-panel">
+          <section className="panel app-rules-panel">
             <div className="panel-header">
               <div>
-                <h2>Register Policy</h2>
-                <p>Create reusable reclaim policies for tracker deployment and licensed app onboarding.</p>
+                <h2>App Rules</h2>
+                <p>
+                  Create policies for each app, one per department for example, and set when a seat counts as in use.
+                  An app is onboarded with one of its policies.
+                </p>
               </div>
-              {policyRegistrationStatus && (
-                <span className="deployment-status">{policyRegistrationStatus}</span>
-              )}
+              {appRuleStatus && <span className="deployment-status">{appRuleStatus}</span>}
             </div>
+            {/* Only the Save button saves: Enter in a field doesn't submit. */}
             <form
-              className="deploy-form policy-registration-form"
-              onSubmit={handleRegisterPolicy}
+              className="app-rule-form"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && event.target.tagName === 'INPUT') event.preventDefault();
+              }}
+              onSubmit={handleSaveRuleForm}
             >
-              <label>
-                <span>Policy Name</span>
-                <input
-                  name="name"
-                  placeholder="Executive apps"
-                  type="text"
-                  value={policyRegistrationForm.name}
-                  onChange={handlePolicyRegistrationInputChange}
-                />
-              </label>
-              <label>
-                <span>Evaluation Window</span>
-                <input
-                  min="0.1"
-                  name="evaluationWindowValue"
-                  step="0.1"
-                  type="number"
-                  value={policyRegistrationForm.evaluationWindowValue}
-                  onChange={handlePolicyRegistrationInputChange}
-                />
-              </label>
-              <label>
-                <span>Active Threshold</span>
-                <input
-                  min="0.1"
-                  name="workedThresholdHours"
-                  step="0.1"
-                  type="number"
-                  value={policyRegistrationForm.workedThresholdHours}
-                  onChange={handlePolicyRegistrationInputChange}
-                />
-              </label>
-              <label>
-                <span>Window Unit</span>
-                <select
-                  name="evaluationWindowUnit"
-                  value={policyRegistrationForm.evaluationWindowUnit}
-                  onChange={handlePolicyRegistrationInputChange}
-                >
-                  <option>Days</option>
-                  <option>Hours</option>
-                  <option>Minutes</option>
-                </select>
-              </label>
-              <button className="deploy-agent-button" type="submit">
-                <span className="action-symbol">+</span>
-                {editingPolicyName ? 'Save Policy' : 'Register Policy'}
-              </button>
-            </form>
+              <div className="deploy-form app-rule-row app-rule-app-row">
+                <label>
+                  <span>App Name</span>
+                  <InventoryAppPicker
+                    apps={inventoryRuleApps(licensedApps)}
+                    value={editingRuleAppId}
+                    onChange={selectRuleApp}
+                  />
+                </label>
+                {ruleApp && (
+                  <label>
+                    <span>Policy</span>
+                    {rulePolicyId === NEW_POLICY ? (
+                      <div className="app-rule-new-policy">
+                        <input
+                          aria-label="New policy name"
+                          autoFocus={appPolicies(ruleApp).length > 0}
+                          placeholder="New policy name, e.g. Design team"
+                          type="text"
+                          value={rulePolicyName}
+                          onChange={(event) => {
+                            setAppRuleStatus('');
+                            setRulePolicyName(event.target.value);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Escape' && appPolicies(ruleApp).length > 0) {
+                              loadRuleForm(ruleApp.id, appPolicies(ruleApp)[0].id);
+                            }
+                          }}
+                        />
+                        {appPolicies(ruleApp).length > 0 && (
+                          <button
+                            aria-label="Back to the policy list"
+                            className="app-rule-new-policy-cancel"
+                            title="Back to the policy list"
+                            type="button"
+                            onClick={() => loadRuleForm(ruleApp.id, appPolicies(ruleApp)[0].id)}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <select value={rulePolicyId} onChange={(event) => loadRuleForm(ruleApp.id, event.target.value)}>
+                        {appPolicies(ruleApp).map((policy) => (
+                          <option key={policy.id} value={policy.id}>{policy.name}</option>
+                        ))}
+                        <option value={NEW_POLICY}>+ Create new policy</option>
+                      </select>
+                    )}
+                  </label>
+                )}
+              </div>
+              {editingRuleAppId && (
+                <>
+                  <div className="app-rule-group">
+                    <h3>Active use on PCs</h3>
+                    <p>Measured by the tracker.</p>
+                    <div className="deploy-form app-rule-row">
+                      <label>
+                        <span>Evaluation Window</span>
+                        <input
+                          min="0.1"
+                          name="windowValue"
+                          step="0.1"
+                          type="number"
+                          value={ruleDraft.windowValue}
+                          onChange={handleRuleDraftChange}
+                        />
+                      </label>
+                      <label>
+                        <span>Window Unit</span>
+                        <select name="windowUnit" value={ruleDraft.windowUnit} onChange={handleRuleDraftChange}>
+                          {WINDOW_UNITS.map((unit) => <option key={unit}>{unit}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Active Threshold</span>
+                        <input
+                          min="0.1"
+                          name="threshold"
+                          step="0.1"
+                          type="number"
+                          value={ruleDraft.threshold}
+                          onChange={handleRuleDraftChange}
+                        />
+                      </label>
+                      <label>
+                        <span>Threshold Unit</span>
+                        <select name="thresholdUnit" value={ruleDraft.thresholdUnit} onChange={handleRuleDraftChange}>
+                          {TIME_UNITS.map((unit) => <option key={unit}>{unit}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
 
-            <div className="table-wrap policy-list">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Policy</th>
-                    <th>Evaluation Window</th>
-                    <th>Active Use Threshold</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {licensePolicies.map((policy) => (
-                    <tr key={policy.name}>
-                      <td>
-                        <div className="device-identity">
-                          <strong>{policy.name}</strong>
-                          <span>Reusable reclaim policy</span>
-                        </div>
-                      </td>
-                      <td>{formatEvaluationWindow(policy)}</td>
-                      <td>
-                        {formatPolicyWindowValue(policy.workedThresholdHours, policy)}
-                      </td>
-                      <td>
-                        <div className="policy-actions">
-                          <button
-                            aria-label={`Edit ${policy.name} policy`}
-                            className="policy-icon-button policy-icon-button-edit"
-                            title="Edit policy"
-                            type="button"
-                            onClick={() => handleEditPolicy(policy)}
-                          >
-                            <span aria-hidden="true">✎</span>
-                          </button>
-                          <button
-                            aria-label={`Remove ${policy.name} policy`}
-                            className="policy-icon-button policy-icon-button-remove"
-                            title="Remove policy"
-                            type="button"
-                            onClick={() => handleRemovePolicy(policy.name)}
-                          >
-                            <span aria-hidden="true">×</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  {ruleApp && (
+                    <div className="app-rule-group">
+                      <h3>Vendor activity</h3>
+                      {ruleAppVendorFields.length > 0 ? (
+                        <>
+                          <p>
+                            From {ruleApp.appName}’s APIs, per user, in the same evaluation window. Leave a field blank
+                            to skip it. The seat counts as in use if active use or any filled field is met.
+                          </p>
+                          <div className="deploy-form app-rule-row">
+                            {ruleAppVendorFields.map((field) => (
+                              <label key={field.id}>
+                                <span>{field.kind === 'within' ? `${field.label} (days)` : `${field.label} (at least)`}</span>
+                                <input
+                                  max={field.max}
+                                  min="1"
+                                  placeholder="Not used"
+                                  step="1"
+                                  type="number"
+                                  value={ruleDraft.vendor?.[field.id] ?? ''}
+                                  onChange={(event) => handleVendorRuleChange(field.id, event.target.value)}
+                                />
+                                <small>{field.source}</small>
+                              </label>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <p>{ruleApp.appName} has no vendor activity data, so its policies use active use on PCs only.</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="app-rule-actions">
+                {ruleApp && rulePolicyId && rulePolicyId !== NEW_POLICY && (
+                  <button
+                    className="download-link-button"
+                    type="button"
+                    onClick={() => handleRemovePolicy(ruleApp.id, rulePolicyId)}
+                  >
+                    Remove Policy
+                  </button>
+                )}
+                <button className="deploy-agent-button" disabled={!editingRuleAppId} type="submit">
+                  <span className="action-symbol">+</span>
+                  {rulePolicyId === NEW_POLICY ? 'Create Policy' : 'Save Policy'}
+                </button>
+              </div>
+            </form>
           </section>
 
           <section className="panel fleet-management-panel">
@@ -6882,18 +6950,6 @@ export default function App({ user = null, onSignOut = null }) {
               className="deploy-form license-onboarding-form"
               onSubmit={handleAddEnterpriseInventoryItem}
             >
-              <label>
-                <span>Type</span>
-                <select
-                  name="appType"
-                  value={licenseAppForm.appType}
-                  onChange={handleLicenseAppInputChange}
-                >
-                  <option>Application</option>
-                  <option>Extension</option>
-                  <option>Web URL</option>
-                </select>
-              </label>
               {licenseAppForm.appType === 'Web URL' ? (
                 <label>
                   <span>URL</span>
@@ -6910,31 +6966,16 @@ export default function App({ user = null, onSignOut = null }) {
                   <div className="app-name-field">
                     <span>App Name</span>
                     <AppNamePicker
-                      appType={licenseAppForm.appType}
                       value={licenseAppForm.appName}
-                      onPick={(entry) => {
-                        setPickedCatalogEntry(entry);
-                        setSkippedCompanionIds(new Set());
-                        // An extension's parent must already be an Application in the inventory.
-                        const parentReady = !entry.parentApp || enterpriseParentAppOptions.includes(entry.parentApp);
-                        setLicenseAppForm((currentForm) => ({
-                          ...currentForm,
-                          appName: entry.appName,
-                          processName: entry.processName || '',
-                          ...(entry.appType === 'Extension'
-                            ? { parentApp: parentReady ? entry.parentApp : '', subscriptionType: entry.subscriptionType || currentForm.subscriptionType }
-                            : {}),
-                        }));
-                        setLicenseOnboardingStatus(
-                          parentReady ? '' : `${entry.appName} runs inside ${entry.parentApp}: add ${entry.parentApp} to the inventory first, then choose it as Parent App.`
-                        );
-                      }}
+                      onPick={applyCatalogEntry}
                       onTypeName={(appName) => {
                         setPickedCatalogEntry(null);
-                        // A recognised app's process name doesn't carry over to a typed one.
+                        // A typed app is a desktop app; a recognised app's
+                        // detection doesn't carry over to it.
                         setLicenseAppForm((currentForm) => ({
                           ...currentForm,
                           appName,
+                          ...(pickedCatalogEntry ? { appType: 'Application', parentApp: '', subscriptionType: '' } : {}),
                           processName: pickedCatalogEntry ? '' : currentForm.processName,
                         }));
                       }}
@@ -6942,18 +6983,6 @@ export default function App({ user = null, onSignOut = null }) {
                   </div>
                 </>
               )}
-              <label>
-                <span>Monthly Cost</span>
-                <input
-                  min="0"
-                  name="monthlyCost"
-                  placeholder="15"
-                  step="0.01"
-                  type="number"
-                  value={licenseAppForm.monthlyCost}
-                  onChange={handleLicenseAppInputChange}
-                />
-              </label>
               <label>
                 <span>Owner</span>
                 <input
@@ -6977,19 +7006,6 @@ export default function App({ user = null, onSignOut = null }) {
               {licenseAppForm.appType === 'Extension' && (
                 <>
                   <label>
-                    <span>Parent App</span>
-                    <select
-                      name="parentApp"
-                      value={licenseAppForm.parentApp}
-                      onChange={handleLicenseAppInputChange}
-                    >
-                      <option value="">Select parent app</option>
-                      {enterpriseParentAppOptions.map((appName) => (
-                        <option key={appName}>{appName}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
                     <span>Subscription</span>
                     <input
                       name="subscriptionType"
@@ -7007,8 +7023,7 @@ export default function App({ user = null, onSignOut = null }) {
                   {companionSurfaces.map((surface) => (
                     <label className="companion-surface" key={surface.id}>
                       <input
-                        checked={surface.parentReady && !skippedCompanionIds.has(surface.id)}
-                        disabled={!surface.parentReady}
+                        checked={!skippedCompanionIds.has(surface.id)}
                         type="checkbox"
                         onChange={(event) =>
                           setSkippedCompanionIds((current) => {
@@ -7024,15 +7039,11 @@ export default function App({ user = null, onSignOut = null }) {
                           {surface.appType === 'Web URL'
                             ? `Web app · ${surface.url}`
                             : surface.appType === 'Extension'
-                              ? `Extension in ${surface.parentApp} · ${surface.appName}`
+                              ? `Extension · ${surface.appName}`
                               : `Desktop app · ${surface.appName}`}
                         </strong>
                         <small>
-                          {!surface.parentReady
-                            ? `Add ${surface.parentApp} to the inventory first`
-                            : surface.verified
-                              ? 'Detection verified'
-                              : 'Detection not yet verified on a PC'}
+                          {surface.verified ? 'Detection verified' : 'Detection not yet verified on a PC'}
                         </small>
                       </span>
                     </label>
@@ -7058,7 +7069,6 @@ export default function App({ user = null, onSignOut = null }) {
                       <th>Owner</th>
                       <th>Email</th>
                       <th>Type</th>
-                      <th>Parent App</th>
                       <th>Monthly Cost</th>
                       <th>Actions</th>
                     </tr>
@@ -7093,10 +7103,11 @@ export default function App({ user = null, onSignOut = null }) {
                             planSummary(app).label
                           )}
                         </td>
-                        <td>{app.owner}</td>
-                        <td>{app.ownerEmail}</td>
+                        <td>
+                          {app.owner || <span className="status-badge status-reclaimable">Owner missing</span>}
+                        </td>
+                        <td>{app.ownerEmail || '-'}</td>
                         <td>{app.appType}</td>
-                        <td>{app.appType === 'Extension' ? app.parentApp : '-'}</td>
                         <td>{formatCurrency(app.monthlyCost)}</td>
                         <td onClick={(event) => event.stopPropagation()}>
                           <div className="policy-actions">
@@ -7134,6 +7145,19 @@ export default function App({ user = null, onSignOut = null }) {
             inventory={licensedApps}
             isOpen={isAppCatalogOpen}
             onClose={() => setIsAppCatalogOpen(false)}
+            onSelect={handleSelectCatalogApp}
+            plansOpen={Boolean(plansAppId || newCatalogApp)}
+          />
+        )}
+
+        {activeView === 'apps-inventory' && newCatalogApp && (
+          <AppPlansModal
+            app={newCatalogApp}
+            bundledApps={[]}
+            isNew
+            key={newCatalogApp.id}
+            onClose={() => setNewCatalogApp(null)}
+            onSave={handleAddNewCatalogApp}
           />
         )}
 
@@ -7336,7 +7360,6 @@ export default function App({ user = null, onSignOut = null }) {
                         <div>
                           <strong>{extension.name}</strong>
                           <div className="tracked-app-details">
-                            <small>parent apps: {extension.parentApps.join(', ')}</small>
                             <small>
                               {formatRuntime(extension.workedRuntimeSeconds)} worked,
                               {` ${formatRuntime(extension.automationWorkedSeconds)} automation, `}

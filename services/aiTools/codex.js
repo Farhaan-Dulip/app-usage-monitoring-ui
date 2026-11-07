@@ -36,7 +36,7 @@ export function normalizeCodex(raw, now = new Date(), { idleDays = 14 } = {}) {
     const email = String(record.user_email || record.email || record.user?.email || '').toLowerCase();
     const day = isoDay(record.date || record.day || record.usage_date || now);
     const tokens = record.tokens || {};
-    const entry = users.get(email) || { threads: 0, turns: 0, credits: 0, mtdCredits: 0, tokens: 0, clients: new Set(), lastActiveAt: null, name: record.user_name || record.name || '' };
+    const entry = users.get(email) || { threads: 0, turns: 0, credits: 0, mtdCredits: 0, tokens: 0, clients: new Set(), activeDays: new Set(), lastActiveAt: null, name: record.user_name || record.name || '' };
     const turns = number(record.turns, record.turn_count);
     entry.threads += number(record.threads, record.thread_count);
     entry.turns += turns;
@@ -44,7 +44,10 @@ export function normalizeCodex(raw, now = new Date(), { idleDays = 14 } = {}) {
     if (day >= monthStart(now)) entry.mtdCredits += number(record.credits, record.credits_used);
     entry.tokens += number(tokens.total, number(tokens.uncached_input) + number(tokens.cached_input) + number(tokens.output));
     for (const client of record.by_client || record.clients || []) if (client.client || client.name) entry.clients.add(client.client || client.name);
-    if (turns > 0 && (!entry.lastActiveAt || day > entry.lastActiveAt)) entry.lastActiveAt = day;
+    if (turns > 0) {
+      entry.activeDays.add(day);
+      if (!entry.lastActiveAt || day > entry.lastActiveAt) entry.lastActiveAt = day;
+    }
     users.set(email, entry);
     credits.set(day, (credits.get(day) || 0) + number(record.credits, record.credits_used));
   }
@@ -57,6 +60,8 @@ export function normalizeCodex(raw, now = new Date(), { idleDays = 14 } = {}) {
     status: activityStatus(entry.lastActiveAt, now, idleDays),
     threads: entry.threads,
     turns: entry.turns,
+    // App Rules' Codex fields: days with turns (with lastActiveAt and turns).
+    activeDays: entry.activeDays.size,
     credits: entry.credits,
     tokens: entry.tokens,
     clients: [...entry.clients].sort().join(', '),

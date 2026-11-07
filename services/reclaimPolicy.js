@@ -29,16 +29,22 @@ function idleThresholdSeconds(policy) {
   return Number(policy.idleThresholdSeconds ?? policy.idle_threshold_seconds ?? DEFAULT_IDLE_THRESHOLD_SECONDS);
 }
 
-// The policy written into the Tracker's monitoring-config.json.
-export function buildReclaimPolicy(policy) {
-  return { idle_threshold_seconds: idleThresholdSeconds(policy) };
+// The policy written into the Tracker's monitoring-config.json: the app's
+// policy (evaluation window and active-time threshold) and the idle threshold
+// the Tracker uses to stop counting time. Same shape as the deployment record.
+export function buildReclaimPolicy(policy = {}, options = {}) {
+  return buildPortalReclaimPolicy(policy, options);
 }
 
 // The policy stored on deployment records (what the dashboard evaluates).
 export function buildPortalReclaimPolicy(policy, { includeTokenThreshold = false } = {}) {
   return {
     evaluation_window_seconds: getEvaluationWindowSeconds(policy),
-    worked_threshold_seconds: getPolicyWindowSeconds(policy.workedThresholdHours, policy),
+    // App rules give the threshold in seconds; older policies gave it in the window's unit.
+    worked_threshold_seconds:
+      Number(policy.workedThresholdSeconds) > 0
+        ? Number(policy.workedThresholdSeconds)
+        : getPolicyWindowSeconds(policy.workedThresholdHours, policy),
     idle_threshold_seconds: idleThresholdSeconds(policy),
     ...(includeTokenThreshold ? { token_threshold: 0 } : {}),
   };

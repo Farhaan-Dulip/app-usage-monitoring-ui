@@ -45,7 +45,7 @@ test('grant message carries the app, its tracker policy and the device', () => {
     type: 'application',
     subscriptionType: 'Postman',
     license_cost: 10,
-    reclaim_policy: { idle_threshold_seconds: 4 },
+    reclaim_policy: { evaluation_window_seconds: 180, worked_threshold_seconds: 60, idle_threshold_seconds: 4 },
   });
 });
 

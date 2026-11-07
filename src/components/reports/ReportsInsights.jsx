@@ -38,7 +38,7 @@ function Breadcrumb({ items }) {
 
 const HUB_CARDS = [
   { id: 'licenses', title: 'End User Apps', text: 'Seats, spend, activity and reclaim candidates for each licensed app, from its vendor admin API and the Trackers.', icon: '▦' },
-  { id: 'platforms', title: 'Enterprise Infrastructure Platform', text: 'Cost, infrastructure insights, contracts and renewal deadlines for Azure, Snowflake, Datadog and Atlassian.', icon: '◈' },
+  { id: 'platforms', title: 'Enterprise Infrastructure Platform', text: 'Cost, infrastructure insights, contracts and renewal deadlines for Azure, Snowflake and Datadog.', icon: '◈' },
   { id: 'tracker', title: 'Tracker Usage', text: 'What the Trackers measured on PCs in the last 30 days: active and idle time by app, PC and day.', icon: '◷' },
   { id: 'ai-tools', title: 'AI Tools & Agents', text: 'Review connected AI tools, agent usage, seat activity, and integration health.', icon: '✦' },
   { id: 'builder', title: 'Custom Report Builder', text: 'Create a tailored report from the inventory, license, usage, and reclaim data that matters to your team.', icon: '≡' },
@@ -54,16 +54,10 @@ const LICENSE_CARD_TOTALS = {
   claude: { licenses: 42, cost: 1260 },
   codex: { licenses: 28, cost: 840 },
   copilot: { licenses: 64, cost: 1216 },
-  chatgpt: { licenses: 36, cost: 720 },
-  cursor: { licenses: 24, cost: 480 },
-  slack: { licenses: 85, cost: 1020 },
   zoom: { licenses: 48, cost: 720 },
   figma: { licenses: 31, cost: 930 },
   postman: { licenses: 27, cost: 675 },
-  docker: { licenses: 22, cost: 550 },
-  jetbrains: { licenses: 39, cost: 1170 },
   vscode: { licenses: 120, cost: 0 },
-  'visual-studio': { licenses: 33, cost: 1485 },
 };
 
 function SectionTotal({ count, cost }) {

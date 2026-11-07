@@ -7,20 +7,13 @@ export const INTEGRATION_NAMES = {
   claude: 'Claude',
   codex: 'Codex',
   copilot: 'GitHub Copilot',
-  slack: 'Slack',
   zoom: 'Zoom',
-  cursor: 'Cursor',
-  chatgpt: 'ChatGPT Enterprise',
-  jetbrains: 'JetBrains (IntelliJ IDEA)',
   figma: 'Figma',
   postman: 'Postman',
-  docker: 'Docker',
   vscode: 'Visual Studio Code',
-  'visual-studio': 'Visual Studio',
   azure: 'Microsoft Azure',
   snowflake: 'Snowflake',
   datadog: 'Datadog',
-  atlassian: 'Atlassian',
 };
 
 // Enterprise Infra Platform: dashboards run on sample data in each API's
@@ -29,13 +22,11 @@ export const PLATFORM_PLANNED = {
   azure: 'Read-only through a Microsoft Entra ID app with Cost Management Reader, Reader and Reservations Reader roles: actual cost, budgets and forecast, Advisor recommendations, orphaned resources and reservations (including Azure Databricks).',
   snowflake: 'Read-only through a Snowflake service user with key-pair authentication on the SQL API: organization usage in currency, contract items, remaining balance and warehouse credits.',
   datadog: 'Read-only through a Datadog API key and an application key with usage_read and hosts_read: estimated, projected and historical cost, hourly usage and hosts.',
-  atlassian: "Read-only through an Atlassian organization admin API key: users with product access and last activity, and the organization's products. Pricing comes from your contract (no public billing API).",
 };
 
 // Apps without an admin API: the dialog explains where their seats are managed.
 export const NO_API = {
   vscode: 'Visual Studio Code is free and has no licence or usage API. The Tracker measures it on each PC; paid add-ons such as GitHub Copilot connect separately.',
-  'visual-studio': "Visual Studio subscriptions are managed in Microsoft's Visual Studio Subscriptions admin portal (manage.visualstudio.com), which has no public admin API to connect. The Tracker measures Visual Studio use on each PC.",
 };
 
 // What each vendor needs, shown in the Connect dialog.
@@ -53,34 +44,12 @@ const FORMS = {
     ],
     forceHint: 'The Codex Analytics route has not been verified against OpenAI\'s reference yet, so the test call may fail even with a valid key.',
   },
-  slack: {
-    intro: 'Paste an admin user token (xoxp-…) from a Slack app installed across your Enterprise Grid org by an Org Owner or Admin, with the admin scope.',
-    fields: [{ name: 'slackToken', label: 'Admin user token', placeholder: 'xoxp-…', secret: true }],
-  },
   zoom: {
     intro: 'Create a Server-to-Server OAuth app in the Zoom App Marketplace (an account admin must allow it) with user read scopes, and paste its credentials.',
     fields: [
       { name: 'zoomAccountId', label: 'Account ID', placeholder: 'From the app credentials page' },
       { name: 'zoomClientId', label: 'Client ID', placeholder: '' },
       { name: 'zoomClientSecret', label: 'Client secret', placeholder: '', secret: true },
-    ],
-  },
-  cursor: {
-    intro: 'Paste a team Admin API key, created by a team admin in the Cursor dashboard (Business or Enterprise plan).',
-    fields: [{ name: 'cursorApiKey', label: 'Admin API key', placeholder: 'crsr_…', secret: true }],
-  },
-  chatgpt: {
-    intro: 'Paste a workspace-scoped OpenAI Admin key and your ChatGPT Enterprise workspace ID (OpenAI Admin console > Credentials > Admin keys).',
-    fields: [
-      { name: 'chatgptAdminKey', label: 'Admin key', placeholder: 'sk-admin…', secret: true },
-      { name: 'chatgptWorkspaceId', label: 'Workspace ID', placeholder: 'ws_…' },
-    ],
-  },
-  jetbrains: {
-    intro: 'An organization admin enables the JetBrains Account API (Organization > Administration). Paste your customer code and the API token.',
-    fields: [
-      { name: 'jetbrainsCustomerCode', label: 'Customer code', placeholder: 'From "Copy support information"' },
-      { name: 'jetbrainsApiKey', label: 'API token', placeholder: '', secret: true },
     ],
   },
   figma: {
@@ -94,14 +63,6 @@ const FORMS = {
   postman: {
     intro: 'Paste a Postman API key of a team admin (Postman > Settings > API keys).',
     fields: [{ name: 'postmanApiKey', label: 'API key', placeholder: 'PMAK-…', secret: true }],
-  },
-  docker: {
-    intro: 'Use a Docker personal access token of an organization owner, with your Docker username and the organization name.',
-    fields: [
-      { name: 'dockerUsername', label: 'Docker username', placeholder: '' },
-      { name: 'dockerToken', label: 'Personal access token', placeholder: 'dckr_pat_…', secret: true },
-      { name: 'dockerOrg', label: 'Organization', placeholder: 'your-org' },
-    ],
   },
   copilot: {
     intro: 'Sign in as a GitHub organization owner or billing manager. The portal needs the manage_billing:copilot and read:org permissions.',
@@ -132,6 +93,12 @@ export function useIntegrations() {
   }, []);
   useEffect(() => reload(), [reload]);
   return [status, reload];
+}
+
+// Whether the portal can read this vendor's admin API right now.
+export function apiAccessAvailable(vendorStatus, vendor) {
+  if (NO_API[vendor] || PLATFORM_PLANNED[vendor]) return false;
+  return Boolean(vendorStatus?.connected && !vendorStatus.problem);
 }
 
 export function integrationBadge(vendorStatus, vendor) {

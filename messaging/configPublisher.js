@@ -1,7 +1,9 @@
-// Publishes approved-license config updates (device_config_outbox) to the
-// Trackers. Runs inside the telemetry worker, which already holds the broker
+// Publishes config updates (device_config_outbox) to the Trackers: approved
+// license requests (`license_granted`) and Deploy Tracker (`config_deployed`). Runs inside the telemetry worker, which already holds the broker
 // connection; the portal only writes the outbox, so an approval never fails
 // because RabbitMQ is briefly unavailable.
+import { releaseWaitingDeployments } from '../services/trackerDeployments.js';
+
 export const CONFIG_EXCHANGE = 'tracker.config';
 
 export function deviceQueueName(deviceId) {
@@ -26,7 +28,10 @@ export async function publishPendingGrants({ channel, outbox, logger = console, 
       });
       await channel.waitForConfirms();
       await outbox.updateOne({ _id: grant._id }, { $set: { status: 'sent', sentAt: now() } });
-      logger.log(`License config for ${grant.message?.app?.name} sent to ${grant.pcName} (${grant.deviceId}).`);
+      const what = grant.message?.type === 'config_deployed'
+        ? `Tracker config (${grant.message.config?.licensed_apps?.length || 0} apps)`
+        : `License config for ${grant.message?.app?.name}`;
+      logger.log(`${what} sent to ${grant.pcName} (${grant.deviceId}).`);
       sent += 1;
     } catch (error) {
       await outbox.updateOne(
@@ -39,7 +44,7 @@ export async function publishPendingGrants({ channel, outbox, logger = console, 
   return sent;
 }
 
-export async function startConfigPublisher({ connection, outbox, logger = console, intervalMs = 5000 }) {
+export async function startConfigPublisher({ connection, outbox, devices = null, logger = console, intervalMs = 5000 }) {
   const channel = await connection.createConfirmChannel();
   await channel.assertExchange(CONFIG_EXCHANGE, 'direct', { durable: true });
   let running = false;
@@ -47,6 +52,8 @@ export async function startConfigPublisher({ connection, outbox, logger = consol
     if (running) return;
     running = true;
     try {
+      // Deployments to PCs that have since connected get their device ID.
+      if (devices) await releaseWaitingDeployments({ outbox, devices });
       await publishPendingGrants({ channel, outbox, logger });
     } catch (error) {
       logger.error(`License config publish failed: ${error.message}`);

@@ -20,8 +20,9 @@ async function main() {
       process.exit(1);
     },
   });
-  // Approved license requests -> Trackers (see services/licenseGrants.js).
-  await startConfigPublisher({ connection, outbox: database.collection('device_config_outbox') });
+  // Approved license requests and Deploy Tracker -> Trackers (see
+  // services/licenseGrants.js and services/trackerDeployments.js).
+  await startConfigPublisher({ connection, outbox: database.collection('device_config_outbox'), devices });
 }
 
 main().catch((error) => {

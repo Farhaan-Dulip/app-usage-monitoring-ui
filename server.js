@@ -28,6 +28,8 @@ import {
 } from './services/licenseRequests.js';
 import { DeviceRegistryError, devicesForEmail, listDevices, setDeviceOwner } from './services/deviceRegistry.js';
 import { queueLicenseGrant } from './services/licenseGrants.js';
+import { deploymentError, latestDeployments, queueTrackerDeployment } from './services/trackerDeployments.js';
+import { vendorRuleResults } from './services/vendorRuleMonitor.js';
 import { aiToolsForUser, clearAiToolsCache, getAiToolsOverview } from './services/aiTools/index.js';
 import { credentialEnv } from './services/aiTools/credentials.js';
 import { createIntegrationsRouter } from './services/aiTools/integrations.js';
@@ -104,6 +106,8 @@ const aiToolBudgets = database.collection('ai_tool_budgets');
 const platformContracts = database.collection('platform_contracts');
 // Approved licenses waiting to be pushed to Trackers (published by the worker).
 const deviceConfigOutbox = database.collection('device_config_outbox');
+// Vendor activity rule results per deployed PC and app (services/vendorRuleMonitor.js).
+const vendorRuleResultsCollection = database.collection('vendor_rule_results');
 const recordCollections = {
   licensePolicies: database.collection('license_policies'),
   licensedApps: database.collection('licensed_apps'),
@@ -746,6 +750,61 @@ app.patch('/api/license-requests/:requestId', async (req, res) => {
   }
 });
 
+// Deploy Tracker: queue the PC's monitoring config (onboarded apps with their
+// policies' evaluation window, active-time and idle thresholds) for its Tracker.
+app.post('/api/tracker-deployments', async (req, res) => {
+  const pcName = String(req.body?.pcName || '').trim();
+  const userEmail = String(req.body?.userEmail || '').trim();
+  const config = req.body?.config;
+  const problem = deploymentError({ pcName, userEmail, config });
+  if (problem) return res.status(400).json({ error: problem });
+  try {
+    const result = await queueTrackerDeployment({ outbox: deviceConfigOutbox, devices, pcName, userEmail, config });
+    return res.json(result);
+  } catch (error) {
+    console.error('Queueing the tracker deployment failed:', error.message);
+    return res.status(500).json({ error: 'Unable to queue the tracker deployment' });
+  }
+});
+
+app.get('/api/tracker-deployments', async (_req, res) => {
+  try {
+    return res.json({ deployments: await latestDeployments(deviceConfigOutbox) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to load tracker deployments' });
+  }
+});
+
+// Vendor activity rules for each deployed user: whether each field in their
+// policy is met (refreshed at most every 15 minutes; ?refresh=1 forces it).
+app.get('/api/vendor-rule-results', async (req, res) => {
+  try {
+    const env = await aiToolsEnv();
+    const identities = await deviceOwnerIdentities();
+    const deployments = await latestDeployments(deviceConfigOutbox);
+    // Deployed users appear in sample data, so the demo matches real people.
+    for (const deployment of deployments) {
+      if (deployment.userEmail && !identities.some((identity) => identity.email === deployment.userEmail)) {
+        identities.push({ name: deployment.userEmail, email: deployment.userEmail });
+      }
+    }
+    const results = await vendorRuleResults({
+      refresh: req.query.refresh === '1',
+      outbox: deviceConfigOutbox,
+      licenses: await recordCollections.onboardedAppLicenses.find({}).limit(500).toArray(),
+      results: vendorRuleResultsCollection,
+      overview: await getAiToolsOverview({ env, sampleIdentities: identities }),
+      env,
+      identities,
+      load: () => vendorRuleResultsCollection.find({}).limit(5000).toArray(),
+    });
+    return res.json({ results });
+  } catch (error) {
+    console.error('Vendor rule check failed:', error.message);
+    return res.status(500).json({ error: 'Unable to check vendor rules' });
+  }
+});
+
 // Read-only endpoints backing the AI agent's MCP tools (service-token only;
 // blocked at the load balancer). App names resolve through inventory aliases
 // so `Postman`, `postman` and `postman.exe` all match, and filtering happens
@@ -1197,6 +1256,7 @@ export async function initialize() {
     telemetryEvents.collectionName,
     devices.collectionName,
     deviceConfigOutbox.collectionName,
+    vendorRuleResultsCollection.collectionName,
     peopleDirectory.collectionName,
     aiToolBudgets.collectionName,
     integrationCredentials.collectionName,

@@ -14,7 +14,7 @@
 // desktop app is licensed (its program running inside another app, or its web
 // pages in the focused browser tab), so onboarding does not offer it.
 // connector: the vendor whose admin API the Connect dialog signs in to (or, for
-// vscode / visual-studio, explains that there is none).
+// vscode, explains that there is none).
 
 // Recognised apps modal: three groups, shown one after the other.
 export const CATALOG_GROUPS = [
@@ -32,32 +32,24 @@ export const APP_CATALOG = [
   // Applications
   { id: 'postman', product: 'postman', connector: 'postman', appType: 'Application', appName: 'Postman', processName: 'Postman.exe', publisher: 'Postman', category: 'API tools', verified: true },
   { id: 'vscode', product: 'vscode', connector: 'vscode', appType: 'Application', appName: 'Visual Studio Code', processName: 'Code.exe', publisher: 'Microsoft', category: 'IDE', verified: true },
-  { id: 'visual-studio', product: 'visual-studio', connector: 'visual-studio', appType: 'Application', appName: 'Visual Studio', processName: 'devenv.exe', publisher: 'Microsoft', category: 'IDE', verified: false },
-  { id: 'intellij', product: 'intellij', connector: 'jetbrains', appType: 'Application', appName: 'IntelliJ IDEA', processName: 'idea64.exe', publisher: 'JetBrains', category: 'IDE', verified: false },
-  { id: 'cursor', product: 'cursor', connector: 'cursor', appType: 'Application', appName: 'Cursor', processName: 'Cursor.exe', publisher: 'Anysphere', category: 'AI IDE', verified: false },
   { id: 'claude-desktop', product: 'claude', connector: 'claude', appType: 'Application', appName: 'Claude', processName: 'claude.exe', publisher: 'Anthropic', category: 'AI assistant', verified: true, note: 'Desktop app; the standalone Claude Code CLI also runs as claude.exe.' },
-  { id: 'chatgpt-desktop', product: 'chatgpt', connector: 'chatgpt', appType: 'Application', appName: 'ChatGPT', processName: 'ChatGPT.exe', publisher: 'OpenAI', category: 'AI assistant', verified: false },
-  { id: 'docker-desktop', product: 'docker', connector: 'docker', appType: 'Application', appName: 'Docker Desktop', processName: 'Docker Desktop.exe', publisher: 'Docker', category: 'Developer tools', verified: false },
   { id: 'figma', product: 'figma', connector: 'figma', appType: 'Application', appName: 'Figma', processName: 'Figma.exe', publisher: 'Figma', category: 'Design', verified: false },
-  { id: 'slack', product: 'slack', connector: 'slack', appType: 'Application', appName: 'Slack', processName: 'slack.exe', publisher: 'Salesforce', category: 'Collaboration', verified: false },
   { id: 'zoom', product: 'zoom', connector: 'zoom', appType: 'Application', appName: 'Zoom', processName: 'Zoom.exe', publisher: 'Zoom', category: 'Collaboration', verified: false },
+  { id: 'codex-desktop', product: 'codex', connector: 'codex', appType: 'Application', appName: 'Codex', processName: 'codex.exe', publisher: 'OpenAI', category: 'AI assistant', verified: false, note: 'The Codex program; its IDE extensions run the same codex.exe.' },
 
-  // Extensions (detected inside the parent app's process tree)
-  { id: 'github-copilot', product: 'copilot', connector: 'copilot', appType: 'Extension', appName: 'GitHub Copilot', processName: 'github-copilot', parentApp: 'Visual Studio Code', subscriptionType: 'Copilot Enterprise', publisher: 'GitHub', category: 'AI assistant', verified: false, note: 'Built-in detection rule for the Copilot extension host in VS Code.' },
-  { id: 'claude-code-vscode', autoDetected: true, product: 'claude', connector: 'claude', appType: 'Extension', appName: 'Claude Code', processName: 'claude-code', parentApp: 'Visual Studio Code', subscriptionType: 'Claude', publisher: 'Anthropic', category: 'AI assistant', verified: false, note: 'Detected by the Claude Code binary running from the anthropic.claude-code extension folder.' },
-  { id: 'codex-vscode', product: 'chatgpt', connector: 'codex', appType: 'Extension', appName: 'Codex', processName: 'codex', parentApp: 'Visual Studio Code', subscriptionType: 'ChatGPT Enterprise', publisher: 'OpenAI', category: 'AI assistant', verified: false, note: 'Built-in detection rule (codex.exe / codex in VS Code).' },
+  // Extensions (detected under any IDE; the Tracker reports which one)
+  { id: 'github-copilot', product: 'copilot', connector: 'copilot', appType: 'Extension', appName: 'GitHub Copilot', processName: 'github-copilot', subscriptionType: 'Copilot Enterprise', publisher: 'GitHub', category: 'AI assistant', verified: false, note: 'Detected by its Copilot program under any IDE; the tracker reports which one.' },
+  { id: 'claude-code-vscode', autoDetected: true, product: 'claude', connector: 'claude', appType: 'Extension', appName: 'Claude Code', processName: 'claude-code', subscriptionType: 'Claude', publisher: 'Anthropic', category: 'AI assistant', verified: false, note: 'Detected by the Claude Code binary running from the anthropic.claude-code extension folder.' },
+  { id: 'codex-vscode', autoDetected: true, product: 'codex', connector: 'codex', appType: 'Extension', appName: 'Codex', processName: 'codex', subscriptionType: 'ChatGPT Enterprise', publisher: 'OpenAI', category: 'AI assistant', verified: false, note: 'Detected as codex.exe under any IDE; the tracker reports which one.' },
 
   // Enterprise infrastructure platforms (admin APIs; no Tracker detection)
   { id: 'azure', connector: 'azure', appType: 'Platform', appName: 'Microsoft Azure', api: 'Azure Cost Management, Advisor, Resource Graph', publisher: 'Microsoft', category: 'Cloud infrastructure', verified: false },
   { id: 'snowflake', connector: 'snowflake', appType: 'Platform', appName: 'Snowflake', api: 'Snowflake SQL API (organization usage)', publisher: 'Snowflake', category: 'Data platform', verified: false },
   { id: 'datadog', connector: 'datadog', appType: 'Platform', appName: 'Datadog', api: 'Datadog Usage Metering API', publisher: 'Datadog', category: 'Observability', verified: false },
-  { id: 'atlassian', connector: 'atlassian', appType: 'Platform', appName: 'Atlassian', api: 'Atlassian Organizations REST API', publisher: 'Atlassian', category: 'Collaboration platform', verified: false },
 
   // Web apps
   { id: 'claude-web', autoDetected: true, product: 'claude', connector: 'claude', appType: 'Web URL', appName: 'Claude (web)', url: 'claude.ai', publisher: 'Anthropic', category: 'AI assistant', verified: false },
-  { id: 'chatgpt-web', autoDetected: true, product: 'chatgpt', connector: 'chatgpt', appType: 'Web URL', appName: 'ChatGPT (web)', url: 'chatgpt.com', publisher: 'OpenAI', category: 'AI assistant', verified: false },
   { id: 'copilot-web', product: 'copilot', connector: 'copilot', appType: 'Web URL', appName: 'GitHub Copilot (github.com)', url: 'github.com/copilot', publisher: 'GitHub', category: 'AI assistant', verified: false },
-  { id: 'slack-web', autoDetected: true, product: 'slack', connector: 'slack', appType: 'Web URL', appName: 'Slack (web)', url: 'app.slack.com', publisher: 'Salesforce', category: 'Collaboration', verified: false },
   { id: 'zoom-web', autoDetected: true, product: 'zoom', connector: 'zoom', appType: 'Web URL', appName: 'Zoom (web)', url: 'app.zoom.us', publisher: 'Zoom', category: 'Collaboration', verified: false },
   { id: 'postman-web', autoDetected: true, product: 'postman', connector: 'postman', appType: 'Web URL', appName: 'Postman (web)', url: 'web.postman.co', publisher: 'Postman', category: 'API tools', verified: false },
   { id: 'vscode-web', autoDetected: true, product: 'vscode', connector: 'vscode', appType: 'Web URL', appName: 'VS Code (web)', url: 'vscode.dev', publisher: 'Microsoft', category: 'IDE', verified: false },
@@ -78,32 +70,24 @@ export function inventoryMatch(entry, inventory) {
 // Display name of each product: the license name its surfaces share.
 export const PRODUCTS = {
   claude: 'Claude',
-  chatgpt: 'ChatGPT',
+  codex: 'Codex',
   copilot: 'GitHub Copilot',
   figma: 'Figma',
-  slack: 'Slack',
   zoom: 'Zoom',
   postman: 'Postman',
   vscode: 'Visual Studio Code',
-  'visual-studio': 'Visual Studio',
-  intellij: 'IntelliJ IDEA',
-  cursor: 'Cursor',
-  docker: 'Docker Desktop',
 };
 
 // Plan names offered as suggestions in the inventory's plans modal. Vendors
 // rename plans, so any other name can be typed.
 export const PRODUCT_PLANS = {
   claude: ['Pro', 'Max', 'Team', 'Enterprise'],
-  chatgpt: ['Plus', 'Pro', 'Business', 'Enterprise'],
+  // Codex is licensed through these ChatGPT plans.
+  codex: ['Plus', 'Pro', 'Business', 'Enterprise'],
   copilot: ['Business', 'Enterprise'],
   figma: ['Professional', 'Organization', 'Enterprise'],
-  slack: ['Pro', 'Business+', 'Enterprise'],
   zoom: ['Pro', 'Business', 'Enterprise'],
   postman: ['Basic', 'Professional', 'Enterprise'],
-  cursor: ['Pro', 'Teams', 'Enterprise'],
-  docker: ['Pro', 'Team', 'Business'],
-  intellij: ['Ultimate', 'All Products Pack'],
 };
 
 export function productSurfaces(productId) {

@@ -24,10 +24,16 @@ function listPosition(button) {
 }
 
 // App Name field for the inventory form: a dropdown of recognised apps (with
-// logos) of the chosen type, plus "Other app…" to type any name. Picking an app
-// hands its catalog entry to onPick so the form can fill in the detection details.
-export default function AppNamePicker({ appType, value, onPick, onTypeName }) {
-  const options = useMemo(() => APP_CATALOG.filter((entry) => entry.appType === appType), [appType]);
+// logos), apps and extensions together, plus "Other app…" to type any name.
+// Picking one hands its catalog entry to onPick, which sets its type and
+// detection details.
+const PICKABLE_TYPES = new Set(['Application', 'Extension']);
+
+export default function AppNamePicker({ value, onPick, onTypeName }) {
+  const options = useMemo(
+    () => APP_CATALOG.filter((entry) => PICKABLE_TYPES.has(entry.appType) && !entry.autoDetected),
+    []
+  );
   const selected = options.find((entry) => entry.appName === value) || null;
   const [custom, setCustom] = useState(Boolean(value) && !selected);
   const [open, setOpen] = useState(false);
@@ -150,7 +156,7 @@ export default function AppNamePicker({ appType, value, onPick, onTypeName }) {
               )}
               <span className="app-name-picker-text">
                 <strong>{item.appName}</strong>
-                {item.id !== OTHER && <small>{item.publisher}{item.parentApp ? ` · in ${item.parentApp}` : ''}</small>}
+                {item.id !== OTHER && <small>{item.publisher}{item.appType === 'Extension' ? ' · Extension' : ''}</small>}
               </span>
             </li>
           ))}

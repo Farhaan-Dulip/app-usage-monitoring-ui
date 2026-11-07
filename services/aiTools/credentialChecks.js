@@ -26,12 +26,6 @@ async function postJson(fetchImpl, vendor, url, { headers = {}, body, form } = {
 const basic = (user, password = '') => `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`;
 
 export const CREDENTIAL_CHECKS = {
-  // https://docs.slack.dev/reference/methods/auth.test
-  async slack(values, fetchImpl) {
-    const result = await postJson(fetchImpl, 'Slack', 'https://slack.com/api/auth.test', { headers: { Authorization: `Bearer ${values.slackToken}` } });
-    if (!result.ok) throw new VendorApiError('Slack', result.error || 'token rejected');
-    return { checked: true };
-  },
 
   // Server-to-Server OAuth: account_credentials grant, then one users call.
   async zoom(values, fetchImpl) {
@@ -40,12 +34,6 @@ export const CREDENTIAL_CHECKS = {
       form: { grant_type: 'account_credentials', account_id: values.zoomAccountId },
     });
     await getJson(fetchImpl, 'Zoom', 'https://api.zoom.us/v2/users?page_size=1', { Authorization: `Bearer ${token.access_token}` });
-    return { checked: true };
-  },
-
-  // Admin API key as the Basic-auth username, empty password.
-  async cursor(values, fetchImpl) {
-    await getJson(fetchImpl, 'Cursor', 'https://api.cursor.com/teams/members', { Authorization: basic(values.cursorApiKey) });
     return { checked: true };
   },
 
@@ -59,23 +47,4 @@ export const CREDENTIAL_CHECKS = {
     return { checked: true };
   },
 
-  // Personal access token -> short-lived JWT, then the organization's members.
-  async docker(values, fetchImpl) {
-    const token = await postJson(fetchImpl, 'Docker', 'https://hub.docker.com/v2/auth/token', {
-      body: { identifier: values.dockerUsername, secret: values.dockerToken },
-    });
-    await getJson(fetchImpl, 'Docker', `https://hub.docker.com/v2/orgs/${encodeURIComponent(values.dockerOrg)}/members?page_size=1`, {
-      Authorization: `Bearer ${token.access_token}`,
-    });
-    return { checked: true };
-  },
-
-  // OpenAI's ChatGPT Enterprise reference is not publicly readable, and no
-  // read-only JetBrains Account API endpoint is confirmed yet: store unchecked.
-  async chatgpt() {
-    return { checked: false, reason: "ChatGPT Enterprise's API reference isn't publicly available, so the key could not be checked." };
-  },
-  async jetbrains() {
-    return { checked: false, reason: 'No read-only JetBrains Account API call is confirmed yet, so the token could not be checked.' };
-  },
 };

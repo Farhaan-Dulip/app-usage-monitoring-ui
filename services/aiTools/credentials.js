@@ -19,25 +19,10 @@ export const VENDOR_FIELDS = {
     githubOrg: { env: 'GITHUB_ORG', required: true },
     githubLoginEmails: { env: 'GITHUB_LOGIN_EMAILS' },
   },
-  // End User Apps dashboards (services/reports/licenseConnectors.js).
-  slack: {
-    slackToken: { env: 'SLACK_ADMIN_TOKEN', secret: true, required: true },
-  },
   zoom: {
     zoomAccountId: { env: 'ZOOM_ACCOUNT_ID', required: true },
     zoomClientId: { env: 'ZOOM_CLIENT_ID', required: true },
     zoomClientSecret: { env: 'ZOOM_CLIENT_SECRET', secret: true, required: true },
-  },
-  cursor: {
-    cursorApiKey: { env: 'CURSOR_ADMIN_API_KEY', secret: true, required: true },
-  },
-  chatgpt: {
-    chatgptAdminKey: { env: 'CHATGPT_ADMIN_KEY', secret: true, required: true },
-    chatgptWorkspaceId: { env: 'CHATGPT_WORKSPACE_ID', required: true },
-  },
-  jetbrains: {
-    jetbrainsCustomerCode: { env: 'JETBRAINS_CUSTOMER_CODE', required: true },
-    jetbrainsApiKey: { env: 'JETBRAINS_API_KEY', secret: true, required: true },
   },
   figma: {
     figmaToken: { env: 'FIGMA_TOKEN', secret: true, required: true },
@@ -48,18 +33,13 @@ export const VENDOR_FIELDS = {
   postman: {
     postmanApiKey: { env: 'POSTMAN_API_KEY', secret: true, required: true },
   },
-  docker: {
-    dockerUsername: { env: 'DOCKER_USERNAME', required: true },
-    dockerToken: { env: 'DOCKER_TOKEN', secret: true, required: true },
-    dockerOrg: { env: 'DOCKER_ORG', required: true },
-  },
 };
 
 // Vendors whose data the AI Tools page pulls (tested with that connector).
 export const DATA_CONNECTORS = new Set(['claude', 'codex', 'copilot']);
 // Vendors whose data the End User Apps dashboards pull (tested with a
-// lightweight credential check). Cursor and ChatGPT are stored only.
-export const LICENSE_DATA_CONNECTORS = new Set(['slack', 'zoom', 'figma', 'postman', 'docker', 'jetbrains']);
+// lightweight credential check).
+export const LICENSE_DATA_CONNECTORS = new Set(['zoom', 'figma', 'postman']);
 
 export class CredentialError extends Error {
   constructor(message, statusCode) {

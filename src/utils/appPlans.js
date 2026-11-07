@@ -10,7 +10,7 @@ export function emptyPlan() {
     id: `plan-${Date.now()}-${nextPlanNumber}`,
     planName: '',
     seats: '',
-    pricePerSeat: '',
+    monthlyCost: '',
     billingCycle: 'Annual',
     startDate: '',
     renewalDate: '',
@@ -24,7 +24,7 @@ export function planError(plan) {
   if (!String(plan.planName || '').trim()) return 'Enter a plan name.';
   const seats = Number(plan.seats);
   if (!Number.isInteger(seats) || seats < 1) return 'Enter a whole number of seats.';
-  if (plan.pricePerSeat !== '' && !(Number(plan.pricePerSeat) >= 0)) return 'Enter a valid price per seat.';
+  if (!(Number(plan.monthlyCost) > 0)) return 'Enter the monthly cost.';
   if (plan.startDate && plan.renewalDate && plan.renewalDate <= plan.startDate) {
     return 'Renewal date must be after the start date.';
   }
@@ -34,12 +34,31 @@ export function planError(plan) {
   return '';
 }
 
+// An optional address such as claude.ai or https://claude.ai/chat.
+export function webUrlError(value) {
+  const url = String(value || '').trim();
+  if (!url || /^(https?:\/\/)?[^\s/.]+(\.[^\s/.]+)+(\/\S*)?$/i.test(url)) return '';
+  return 'Enter a valid web URL, such as claude.ai.';
+}
+
+// Plans saved before monthly cost replaced price per seat.
+export function loadPlan(plan) {
+  if (plan.monthlyCost !== undefined) return { ...plan };
+  const { pricePerSeat, ...rest } = plan;
+  return { ...rest, monthlyCost: Number(pricePerSeat) > 0 ? Number(pricePerSeat) * Number(plan.seats) : '' };
+}
+
+// What an app costs: the sum of its plans.
+export function plansMonthlyCost(plans) {
+  return plans.reduce((total, plan) => total + (Number(plan.monthlyCost) || 0), 0);
+}
+
 export function normalizePlan(plan) {
   return {
     ...plan,
     planName: String(plan.planName).trim(),
     seats: Number(plan.seats),
-    pricePerSeat: plan.pricePerSeat === '' ? '' : Number(plan.pricePerSeat),
+    monthlyCost: Number(plan.monthlyCost),
     noticeDays: plan.noticeDays === '' ? '' : Number(plan.noticeDays),
   };
 }

@@ -1,16 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { APP_CATALOG, CATALOG_GROUPS, catalogGroup, inventoryMatch } from '../data/appCatalog';
 import AppInventoryIcon from './AppInventoryIcon';
-import ConnectDialog, { integrationBadge, useIntegrations } from './ConnectDialog';
+import { apiAccessAvailable, useIntegrations } from './ConnectDialog';
 
 // Recognised apps in three groups (End User Apps, Enterprise Infra Platform,
-// AI Agents & Tools): how each is detected or connected, and Connect for its
-// vendor admin API.
-export default function AppCatalog({ inventory, isOpen, onClose }) {
+// AI Agents & Tools): how each is detected, and whether its vendor admin API is
+// connected (connecting happens in the app's plans modal).
+export default function AppCatalog({ inventory, isOpen, onClose, onSelect, plansOpen = false }) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
-  const [connecting, setConnecting] = useState(null);
   const [integrations, reloadIntegrations] = useIntegrations();
+  // A vendor may have been connected from the plans modal over this catalog.
+  useEffect(() => {
+    if (!plansOpen) reloadIntegrations();
+  }, [plansOpen, reloadIntegrations]);
   const vendorStatus = (vendor) => integrations?.vendors.find((item) => item.vendor === vendor);
   const categories = useMemo(
     () => [...new Set(APP_CATALOG.map((entry) => entry.category))].sort(),
@@ -37,7 +40,7 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
         <div>
           <p className="eyebrow">App catalog</p>
           <h2 id="app-catalog-title">Recognised apps</h2>
-          <p>Start from a known app: the detection details are filled in for you. Adding it to the inventory is still your decision, with your owner and cost.</p>
+          <p>Click an app to open its plans. Detection details are filled in for you, and apps not in your inventory yet are added when you save.</p>
         </div>
         <button className="settings-close-button" type="button" aria-label="Close recognised apps" onClick={onClose}>&times;</button>
       </div>
@@ -56,8 +59,8 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
           </label>
         </div>
       {CATALOG_GROUPS.map((group) => {
-        // Web apps stay in the catalog (the inventory form's app picker uses them) but not as cards here.
-        const entries = APP_CATALOG.filter((entry) => entry.appType !== 'Web URL' && catalogGroup(entry) === group.id && matches(entry));
+        // Web apps and surfaces of another app (Claude Code under Claude) aren't cards of their own.
+        const entries = APP_CATALOG.filter((entry) => entry.appType !== 'Web URL' && !entry.autoDetected && catalogGroup(entry) === group.id && matches(entry));
         if (!entries.length) return null;
         return (
       <div className="catalog-section" key={group.id}>
@@ -68,13 +71,25 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
         <div className="catalog-grid">
           {entries.map((entry) => {
                 const existing = inventoryMatch(entry, inventory);
+                // Platforms are tracked through their admin APIs, not the inventory form.
+                const selectable = entry.appType !== 'Platform';
                 return (
-                  <article className={`catalog-card${existing ? ' catalog-card-added' : ''}`} key={entry.id}>
+                  <article
+                    className={`catalog-card${existing ? ' catalog-card-added' : ''}${selectable ? ' catalog-card-selectable' : ''}`}
+                    key={entry.id}
+                    onClick={selectable ? () => onSelect(entry) : undefined}
+                  >
                     <div className="catalog-card-details">
                     <div className="catalog-card-head">
                         <AppInventoryIcon appName={entry.appName} className="catalog-icon" />
                       <div>
-                        <strong>{entry.appName}</strong>
+                        {selectable ? (
+                          <button className="catalog-card-open" type="button">
+                            {entry.appName}
+                          </button>
+                        ) : (
+                          <strong>{entry.appName}</strong>
+                        )}
                         <small title={`${entry.publisher} · ${entry.category}`}>{entry.publisher} · {entry.category}</small>
                       </div>
                     </div>
@@ -87,14 +102,9 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
                     </dl>
                     {entry.note && <small className="catalog-note">{entry.note}</small>}
                     </div>
-                    <div className="catalog-card-actions">
-                      <span className={`status-badge ${integrationBadge(vendorStatus(entry.connector), entry.connector).className}`}>
-                        {integrationBadge(vendorStatus(entry.connector), entry.connector).label}
-                      </span>
-                      <button className="download-link-button" type="button" onClick={() => setConnecting(entry.connector)}>
-                        Connect
-                      </button>
-                    </div>
+                    <span className={`catalog-api-access${apiAccessAvailable(vendorStatus(entry.connector), entry.connector) ? ' available' : ''}`}>
+                      API access {apiAccessAvailable(vendorStatus(entry.connector), entry.connector) ? 'available' : 'not available'}
+                    </span>
                   </article>
                 );
           })}
@@ -102,18 +112,9 @@ export default function AppCatalog({ inventory, isOpen, onClose }) {
       </div>
         );
       })}
-      {!APP_CATALOG.some((entry) => entry.appType !== 'Web URL' && matches(entry)) && <p className="muted-value">No recognised app matches your search.</p>}
+      {!APP_CATALOG.some((entry) => entry.appType !== 'Web URL' && !entry.autoDetected && matches(entry)) && <p className="muted-value">No recognised app matches your search.</p>}
       </div>
     </section>
-    {connecting && (
-      <ConnectDialog
-        vendor={connecting}
-        status={vendorStatus(connecting)}
-        canConnect={Boolean(integrations?.canConnect)}
-        onClose={() => setConnecting(null)}
-        onChanged={reloadIntegrations}
-      />
-    )}
     </div>
   );
 }

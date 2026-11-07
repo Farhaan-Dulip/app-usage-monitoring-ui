@@ -115,10 +115,12 @@ guides were available.
 
 | Endpoint | Used for |
 |---|---|
-| `GET /users` | Team members: name, email, roles, joined date |
-| `GET /audit/logs?since&until&limit=300` (cursor paging) | Changes per person and day; members with no activity in 30 days. Enterprise plans |
+| `GET /users` | Team members: name, email, roles, joined date (`joinedAt`). No last-active field |
+| `GET /audit-actions` | Event codes and display names; the sign-in codes are the ones named "User Logged-In Using …" |
+| `GET /audit/logs?since&until&limit=300` (cursor paging, 180 days) | Last sign-in per person (`data.actor.email`, `timestamp`). Enterprise plans; Postman keeps 180 days |
 
-- **Verified:** `/users` from integrator docs, `/audit/logs` from docs; field names unverified until a live call.
+- **What the audit log holds:** account and security events (sign-ins, sign-outs, API keys, roles, billing), not work in Postman: no request runs or collection edits. Last sign-in is the only per-person activity signal, and the desktop app stays signed in for long periods, so a missing sign-in alone doesn't mean an unused seat. App Rules offers it as "Signed in within (days)", at most 180.
+- **Verified:** field names from Postman's API reference ([audit logs](https://learning.postman.com/api-docs/api-reference/audit-logs/get-audit-logs.md), [audit actions](https://learning.postman.com/api-docs/api-reference/audit-logs/get-audit-log-event-actions.md), [team users](https://learning.postman.com/api-docs/api-reference/users/get-team-users.md)); sign-in action codes unverified until a live call.
 
 ### Docker Desktop: Docker Hub API (live data)
 - **Auth:** `POST https://hub.docker.com/v2/auth/token` with `{ identifier: <username>, secret: <personal access token> }` returns a short-lived JWT, sent as `Authorization: Bearer`. SSO-enforced orgs need a PAT.

@@ -53,7 +53,7 @@ export function normalizeClaude(raw, now = new Date(), { idleDays = 14 } = {}) {
     if (record.actor?.type !== 'user_actor') continue;
     const email = String(record.actor.email_address || '').toLowerCase();
     if (!email) continue;
-    const entry = activity.get(email) || { sessions: 0, linesAdded: 0, linesRemoved: 0, commits: 0, pullRequests: 0, costCents: 0, mtdCostCents: 0, accepted: 0, rejected: 0, lastActiveAt: null };
+    const entry = activity.get(email) || { sessions: 0, linesAdded: 0, linesRemoved: 0, commits: 0, pullRequests: 0, costCents: 0, mtdCostCents: 0, accepted: 0, rejected: 0, lastActiveAt: null, activeDays: new Set() };
     const inMonth = isoDay(record.date) >= monthStart(now);
     const metrics = record.core_metrics || {};
     entry.sessions += Number(metrics.num_sessions) || 0;
@@ -69,7 +69,10 @@ export function normalizeClaude(raw, now = new Date(), { idleDays = 14 } = {}) {
       entry.accepted += Number(action.accepted) || 0;
       entry.rejected += Number(action.rejected) || 0;
     }
-    if ((Number(metrics.num_sessions) || 0) > 0 && (!entry.lastActiveAt || record.date > entry.lastActiveAt)) entry.lastActiveAt = record.date;
+    if ((Number(metrics.num_sessions) || 0) > 0) {
+      entry.activeDays.add(isoDay(record.date));
+      if (!entry.lastActiveAt || record.date > entry.lastActiveAt) entry.lastActiveAt = record.date;
+    }
     activity.set(email, entry);
   }
 
@@ -88,6 +91,9 @@ export function normalizeClaude(raw, now = new Date(), { idleDays = 14 } = {}) {
       commits: usage?.commits || 0,
       pullRequests: usage?.pullRequests || 0,
       acceptanceRate: usage && usage.accepted + usage.rejected > 0 ? usage.accepted / (usage.accepted + usage.rejected) : null,
+      // App Rules' Claude fields: days with Claude Code sessions and accepted edits.
+      activeDays: usage?.activeDays.size || 0,
+      acceptedEdits: usage?.accepted || 0,
       costUsd: usage ? usage.costCents / 100 : 0,
       // Month-to-date Claude Code estimated cost (USD).
       mtdSpend: usage ? usage.mtdCostCents / 100 : 0,

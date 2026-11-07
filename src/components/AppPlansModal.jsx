@@ -1,28 +1,39 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { PRODUCT_PLANS, findCatalogSurface } from '../data/appCatalog';
-import { BILLING_CYCLES, emptyPlan, normalizePlan, planError } from '../utils/appPlans';
+import { PRODUCT_PLANS, findCatalogSurface, productSurfaces } from '../data/appCatalog';
+import { BILLING_CYCLES, emptyPlan, loadPlan, normalizePlan, planError, plansMonthlyCost, webUrlError } from '../utils/appPlans';
 import AppInventoryIcon from './AppInventoryIcon';
 import ConnectDialog, { integrationBadge, useIntegrations } from './ConnectDialog';
 
-// Plans and tracker detection for one inventory app, opened from its row.
-// Plans are entered by hand for now; a connected vendor shows its status here.
-export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
+// Plans and tracker detection for one app, opened from its inventory row or a
+// Recognised apps card. Save adds an app not in the inventory yet (isNew); its
+// owner is set on the inventory page. Plans are entered by hand for now; a
+// connected vendor shows its status here.
+export default function AppPlansModal({ app, bundledApps, isNew = false, onClose, onSave }) {
   const titleId = useId();
   const listId = useId();
   const dialogRef = useRef(null);
-  const [plans, setPlans] = useState(() => (app.plans?.length ? app.plans.map((plan) => ({ ...plan })) : []));
+  const [plans, setPlans] = useState(() => (app.plans || []).map(loadPlan));
   const [noPlanNeeded, setNoPlanNeeded] = useState(Boolean(app.noPlanNeeded));
   const [processName, setProcessName] = useState(app.processName || '');
+  const catalog = findCatalogSurface(app);
+  // A desktop app offers these only when its product has that surface.
+  const surfaces = app.appType === 'Application' ? productSurfaces(catalog?.product) : [];
+  const catalogWebUrl = surfaces.find((entry) => entry.appType === 'Web URL')?.url;
+  const extensionNames = surfaces.filter((entry) => entry.appType === 'Extension').map((entry) => entry.appName);
+  const supportsExtensions = extensionNames.length > 0;
+  const [webUrl, setWebUrl] = useState(app.webUrl ?? (catalogWebUrl ? `https://${catalogWebUrl}` : ''));
+  const [trackExtensions, setTrackExtensions] = useState(app.trackExtensions ?? true);
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(null);
   const [integrations, reloadIntegrations] = useIntegrations();
 
-  const catalog = findCatalogSurface(app);
   const vendor = catalog?.connector;
   const vendorStatus = integrations?.vendors.find((item) => item.vendor === vendor);
   const badge = vendor ? integrationBadge(vendorStatus, vendor) : null;
   const planOptions = PRODUCT_PLANS[catalog?.product] || [];
-  const needsProcess = app.appType !== 'Web URL';
+  const isExtension = app.appType === 'Extension';
+  // A recognised extension is only marked for tracking; its detection is known.
+  const needsProcess = app.appType !== 'Web URL' && !(isExtension && catalog);
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -39,6 +50,10 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
       setError('Enter the process name so the tracker can find this app.');
       return;
     }
+    if (catalogWebUrl && webUrlError(webUrl)) {
+      setError(webUrlError(webUrl));
+      return;
+    }
     if (!noPlanNeeded) {
       const failing = plans.map((plan, index) => ({ index, problem: planError(plan) })).find((item) => item.problem);
       if (failing) {
@@ -46,10 +61,15 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
         return;
       }
     }
+    const savedPlans = noPlanNeeded ? [] : plans.map(normalizePlan);
     onSave({
       processName: processName.trim(),
+      ...(catalogWebUrl ? { webUrl: webUrl.trim() } : {}),
+      ...(supportsExtensions || isExtension ? { trackExtensions } : {}),
       noPlanNeeded,
-      plans: noPlanNeeded ? [] : plans.map(normalizePlan),
+      plans: savedPlans,
+      // An app with no plans yet keeps its existing cost.
+      ...(noPlanNeeded || savedPlans.length > 0 ? { monthlyCost: plansMonthlyCost(savedPlans) } : {}),
     });
   };
 
@@ -77,7 +97,7 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
             <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
             <div>
               <h2 id={titleId}>{app.appName}</h2>
-              <p>{app.appType}{app.parentApp ? ` in ${app.parentApp}` : ''}</p>
+              <p>{app.appType}</p>
             </div>
             <button aria-label="Close" className="app-plans-close" type="button" onClick={onClose}>×</button>
           </div>
@@ -89,11 +109,11 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
                 <span>
                   {vendorStatus?.connected
                     ? 'Enter plans below for now. Filling them in from the vendor comes next.'
-                    : 'Enter plans below, or connect the vendor to bring in its seats and activity.'}
+                    : 'Enter plans below, or connect APIs to bring in seats and activity.'}
                 </span>
                 {!vendorStatus?.connected && (
                   <button className="download-link-button" type="button" onClick={() => setConnecting(vendor)}>
-                    Connect vendor
+                    Connect APIs
                   </button>
                 )}
               </div>
@@ -146,8 +166,8 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
                         <input min="1" placeholder="50" step="1" type="number" value={plan.seats} onChange={(event) => updatePlan(plan.id, 'seats', event.target.value)} />
                       </label>
                       <label>
-                        <span>Price per seat</span>
-                        <input min="0" placeholder="25" step="0.01" type="number" value={plan.pricePerSeat} onChange={(event) => updatePlan(plan.id, 'pricePerSeat', event.target.value)} />
+                        <span>Monthly cost</span>
+                        <input min="0" placeholder="1250" step="0.01" type="number" value={plan.monthlyCost} onChange={(event) => updatePlan(plan.id, 'monthlyCost', event.target.value)} />
                       </label>
                       <label>
                         <span>Billing cycle</span>
@@ -186,7 +206,7 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
 
             <section className="app-plans-section">
               <div className="app-plans-section-title"><h3>Tracker detection</h3></div>
-              {needsProcess ? (
+              {needsProcess && (
                 <label className="app-plans-process">
                   <span>Process name</span>
                   <input
@@ -200,8 +220,32 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
                   />
                   <small>The program the tracker looks for on each PC.</small>
                 </label>
-              ) : (
-                <p className="app-plans-empty">Web address: {app.url}</p>
+              )}
+              {app.appType === 'Web URL' && <p className="app-plans-empty">Web address: {app.url}</p>}
+              {catalogWebUrl && (
+                <label className="app-plans-process">
+                  <span>Web URL</span>
+                  <input
+                    placeholder={catalogWebUrl}
+                    type="text"
+                    value={webUrl}
+                    onChange={(event) => {
+                      setError('');
+                      setWebUrl(event.target.value);
+                    }}
+                  />
+                  <small>Where people use this app in a browser.</small>
+                </label>
+              )}
+              {(supportsExtensions || isExtension) && (
+                <label className="app-plans-free">
+                  <input
+                    checked={trackExtensions}
+                    type="checkbox"
+                    onChange={(event) => setTrackExtensions(event.target.checked)}
+                  />
+                  {isExtension ? 'Track this extension' : `Track extensions (${extensionNames.join(', ')})`}
+                </label>
               )}
               {bundledApps.length > 0 && (
                 <p className="app-plans-empty">Also tracked with this license: {bundledApps.map((item) => item.appName).join(', ')}</p>
@@ -212,7 +256,7 @@ export default function AppPlansModal({ app, bundledApps, onClose, onSave }) {
           <div className="app-plans-footer">
             {error && <p className="app-plans-error" role="alert">{error}</p>}
             <button className="download-link-button" type="button" onClick={onClose}>Cancel</button>
-            <button className="deploy-agent-button" type="submit">Save</button>
+            <button className="deploy-agent-button" type="submit">{isNew ? 'Add to inventory' : 'Save'}</button>
           </div>
         </form>
         {connecting && (

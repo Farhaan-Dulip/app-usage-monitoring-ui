@@ -14,8 +14,10 @@ export function deriveTrackerConfig(deploymentPolicyRecords = [], lastDeployment
 
   // The Tracker reports application rows by lower-cased process name.
   const appKey = (value) => String(value || '').trim().toLowerCase();
-  const applications = records.filter((record) => !record.parent_app && record.app_name);
-  const extensions = records.filter((record) => record.parent_app && record.app_name);
+  // An extension runs in any host, so it may have no parent app.
+  const isExtension = (record) => Boolean(record.parent_app) || ['agent', 'extension'].includes(record.type);
+  const applications = records.filter((record) => !isExtension(record) && record.app_name);
+  const extensions = records.filter((record) => isExtension(record) && record.app_name);
   const licensedApps = [...new Set(applications.map((record) => appKey(record.app_name)))];
 
   return {

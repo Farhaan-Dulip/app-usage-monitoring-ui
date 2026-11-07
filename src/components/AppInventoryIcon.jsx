@@ -1,12 +1,8 @@
 import {
-  siAtlassian,
   siClaude,
   siDatadog,
-  siCursor,
-  siDocker,
   siFigma,
   siGithubcopilot,
-  siIntellijidea,
   siPostman,
   siSnowflake,
   siZoom,
@@ -18,11 +14,8 @@ import {
 // come with brand terms, so they keep a lettered tile in the brand colour.
 const LOGOS = {
   postman: siPostman,
-  'intellij idea': siIntellijidea,
-  cursor: siCursor,
   claude: siClaude,
   'claude (web)': siClaude,
-  'docker desktop': siDocker,
   figma: siFigma,
   'figma (web)': siFigma,
   zoom: siZoom,
@@ -30,23 +23,15 @@ const LOGOS = {
   'github copilot (github.com)': siGithubcopilot,
   snowflake: siSnowflake,
   datadog: siDatadog,
-  atlassian: siAtlassian,
 };
 
 const APP_ICON_DETAILS = {
   postman: { label: 'P', color: '#ff6c37' },
   'visual studio code': { label: '⌁', color: '#007acc' },
-  'visual studio': { label: 'VS', color: '#5c2d91' },
-  'intellij idea': { label: 'IJ', color: '#111111' },
-  cursor: { label: 'C', color: '#171717' },
   claude: { label: 'AI', color: '#cc785c' },
   'claude (web)': { label: 'AI', color: '#cc785c' },
-  chatgpt: { label: '◎', color: '#10a37f' },
-  'chatgpt (web)': { label: '◎', color: '#10a37f' },
-  'docker desktop': { label: 'D', color: '#2496ed' },
   figma: { label: 'F', color: '#a259ff' },
   'figma (web)': { label: 'F', color: '#a259ff' },
-  slack: { label: 'S', color: '#4a154b' },
   zoom: { label: 'Z', color: '#2d8cff' },
   'github copilot': { label: '⌘', color: '#24292f' },
   codex: { label: 'C', color: '#10a37f' },
@@ -55,7 +40,6 @@ const APP_ICON_DETAILS = {
   'microsoft azure': { label: 'Az', color: '#0078d4' },
   snowflake: { label: 'S', color: '#29b5e8' },
   datadog: { label: 'D', color: '#632ca6' },
-  atlassian: { label: 'A', color: '#0052cc' },
 };
 
 export default function AppInventoryIcon({ appName, className = '' }) {

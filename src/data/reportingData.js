@@ -19,7 +19,7 @@ export const reportTemplates = [
   },
   {
     id: 'ai-adoption', name: 'AI Adoption', audience: 'Engineering',
-    description: 'Copilot, Cursor, and AI extension utilization with model adoption and developer efficiency signals.',
+    description: 'Copilot, Claude, and AI extension utilization with model adoption and developer efficiency signals.',
     owner: 'Engineering Enablement', cadence: 'Monthly', format: 'JSON', accent: 'report-accent-purple',
     includedSections: ['AI seats', 'Selected models', 'Developer efficiency'],
   },
