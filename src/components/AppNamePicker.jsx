@@ -32,16 +32,19 @@ export default function AppNamePicker({ appType, value, onPick, onTypeName }) {
   const [custom, setCustom] = useState(Boolean(value) && !selected);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const otherChosenRef = useRef(false);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
   const listRef = useRef(null);
   const [position, setPosition] = useState(null);
   const listId = useId();
-  const items = options;
+  const items = [...options, { id: OTHER, appName: 'Other app…' }];
 
   useEffect(() => {
+    if (value) otherChosenRef.current = false;
     if (value && !options.some((entry) => entry.appName === value)) setCustom(true);
-    if (!value) setCustom(false);
+    // A cleared form leaves Other mode, unless Other is what cleared the name.
+    if (!value && !otherChosenRef.current) setCustom(false);
   }, [value, options]);
 
   useEffect(() => {
@@ -74,6 +77,7 @@ export default function AppNamePicker({ appType, value, onPick, onTypeName }) {
   const choose = (item) => {
     setOpen(false);
     if (item.id === OTHER) {
+      otherChosenRef.current = true;
       setCustom(true);
       onTypeName('');
       return;
@@ -146,7 +150,7 @@ export default function AppNamePicker({ appType, value, onPick, onTypeName }) {
               )}
               <span className="app-name-picker-text">
                 <strong>{item.appName}</strong>
-                {item.id !== OTHER && <small>{item.processName}{item.parentApp ? ` · in ${item.parentApp}` : ''}</small>}
+                {item.id !== OTHER && <small>{item.publisher}{item.parentApp ? ` · in ${item.parentApp}` : ''}</small>}
               </span>
             </li>
           ))}

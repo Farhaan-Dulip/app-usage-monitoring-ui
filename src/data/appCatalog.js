@@ -91,6 +91,21 @@ export const PRODUCTS = {
   docker: 'Docker Desktop',
 };
 
+// Plan names offered as suggestions in the inventory's plans modal. Vendors
+// rename plans, so any other name can be typed.
+export const PRODUCT_PLANS = {
+  claude: ['Pro', 'Max', 'Team', 'Enterprise'],
+  chatgpt: ['Plus', 'Pro', 'Business', 'Enterprise'],
+  copilot: ['Business', 'Enterprise'],
+  figma: ['Professional', 'Organization', 'Enterprise'],
+  slack: ['Pro', 'Business+', 'Enterprise'],
+  zoom: ['Pro', 'Business', 'Enterprise'],
+  postman: ['Basic', 'Professional', 'Enterprise'],
+  cursor: ['Pro', 'Teams', 'Enterprise'],
+  docker: ['Pro', 'Team', 'Business'],
+  intellij: ['Ultimate', 'All Products Pack'],
+};
+
 export function productSurfaces(productId) {
   return productId ? APP_CATALOG.filter((entry) => entry.product === productId) : [];
 }

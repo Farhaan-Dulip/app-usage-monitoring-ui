@@ -5782,3 +5782,198 @@ label.platform-contract-check {
     width: 100%;
   }
 }
+
+/* Inventory: an app's plans and tracker detection. */
+.inventory-app-row {
+  cursor: pointer;
+}
+
+.inventory-app-row:hover td {
+  background: #f8fafc;
+}
+
+.inventory-app-open {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inventory-app-open:hover {
+  color: #15669e;
+  text-decoration: underline;
+}
+
+.app-plans-modal {
+  width: min(100%, 760px);
+  overflow-y: auto;
+}
+
+.app-plans-modal:focus {
+  outline: none;
+}
+
+.app-plans-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 22px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.app-plans-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.app-plans-header p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.app-plans-close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.app-plans-close:hover {
+  background: #eef2f7;
+  color: #0f172a;
+}
+
+.app-plans-body {
+  display: grid;
+  gap: 18px;
+  padding: 18px 22px;
+}
+
+.app-plans-connection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f1f6fb;
+  font-size: 13px;
+  color: #475569;
+}
+
+.app-plans-connection .download-link-button {
+  margin-left: auto;
+}
+
+.app-plans-section {
+  display: grid;
+  gap: 10px;
+}
+
+.app-plans-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-plans-section-title h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.app-plans-free,
+.app-plan-renew {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #475569;
+  cursor: pointer;
+}
+
+.app-plans-empty {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.app-plan {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #dce5f0;
+  border-radius: 12px;
+}
+
+.app-plan legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.app-plan > label:not(.app-plan-renew),
+.app-plans-process {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.app-plan input:not([type='checkbox']),
+.app-plan select,
+.app-plans-process input {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 10px;
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.app-plans-process small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.app-plan-remove {
+  position: absolute;
+  top: -8px;
+  right: 10px;
+}
+
+.app-plans-add {
+  justify-self: start;
+}
+
+.app-plans-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.app-plans-error {
+  margin: 0 auto 0 0;
+  font-size: 13px;
+  color: #be2634;
+}

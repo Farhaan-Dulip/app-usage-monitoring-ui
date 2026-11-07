@@ -14,6 +14,8 @@ import InventoryAppPicker from './components/InventoryAppPicker';
 import SettingsModal from './components/SettingsModal';
 import RuntimeBreakdown from './components/RuntimeBreakdown';
 import LicenseScopePicker from './components/LicenseScopePicker';
+import AppPlansModal from './components/AppPlansModal';
+import { planSummary } from './utils/appPlans';
 import {
   getPortalClientId,
 } from './utils/clientPreferences';
@@ -2951,6 +2953,7 @@ export default function App({ user = null, onSignOut = null }) {
   const [editingOnboardedLicenseId, setEditingOnboardedLicenseId] = useState('');
   const [licenseAppForm, setLicenseAppForm] = useState(DEFAULT_LICENSE_APP_FORM);
   const [pickedCatalogEntry, setPickedCatalogEntry] = useState(null);
+  const [plansAppId, setPlansAppId] = useState('');
   const [skippedCompanionIds, setSkippedCompanionIds] = useState(() => new Set());
   const [editingInventoryAppId, setEditingInventoryAppId] = useState('');
   const [licenseOnboardingStatus, setLicenseOnboardingStatus] = useState('');
@@ -4625,11 +4628,6 @@ export default function App({ user = null, onSignOut = null }) {
       return;
     }
 
-    if (appType !== 'Web URL' && !processName) {
-      setLicenseOnboardingStatus('Enter the app process name.');
-      return;
-    }
-
     if (!Number.isFinite(monthlyCost) || monthlyCost <= 0) {
       setLicenseOnboardingStatus('Enter a valid monthly license cost.');
       return;
@@ -4734,6 +4732,8 @@ export default function App({ user = null, onSignOut = null }) {
     setPickedCatalogEntry(null);
     setSkippedCompanionIds(new Set());
     setEditingInventoryAppId('');
+    // An app outside the catalog still needs its process name.
+    if (appType !== 'Web URL' && !processName) setPlansAppId(nextApp.id);
   };
 
   const handleOnboardAppLicense = (event) => {
@@ -4814,6 +4814,19 @@ export default function App({ user = null, onSignOut = null }) {
     setLicenseOnboardingStatus(
       `${removedLicense?.appName || 'App'} license removed.`
     );
+  };
+
+  // Bundled surfaces share the main app's plans.
+  const openAppPlans = (app) => {
+    const mainApp = licensedApps.find((item) => item.id === app.bundledWith);
+    setPlansAppId((mainApp || app).id);
+  };
+
+  const handleSaveAppPlans = (changes) => {
+    const applyChanges = (app) => (app.id === plansAppId ? { ...app, ...changes } : app);
+    setLicensedApps((currentApps) => currentApps.map(applyChanges));
+    setOnboardedAppLicenses((currentLicenses) => currentLicenses.map(applyChanges));
+    setPlansAppId('');
   };
 
   const handleEditInventoryApp = (app) => {
@@ -6573,7 +6586,7 @@ export default function App({ user = null, onSignOut = null }) {
                             <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
                             <div>
                               <strong>{app.appName}</strong>
-                              <span>{app.processName}</span>
+                              <span>{app.appType}</span>
                             </div>
                           </div>
                         </td>
@@ -6918,20 +6931,15 @@ export default function App({ user = null, onSignOut = null }) {
                       }}
                       onTypeName={(appName) => {
                         setPickedCatalogEntry(null);
-                        setLicenseAppForm((currentForm) => ({ ...currentForm, appName }));
+                        // A recognised app's process name doesn't carry over to a typed one.
+                        setLicenseAppForm((currentForm) => ({
+                          ...currentForm,
+                          appName,
+                          processName: pickedCatalogEntry ? '' : currentForm.processName,
+                        }));
                       }}
                     />
                   </div>
-                  <label>
-                    <span>Process Name</span>
-                    <input
-                      name="processName"
-                      placeholder="code.exe"
-                      type="text"
-                      value={licenseAppForm.processName}
-                      onChange={handleLicenseAppInputChange}
-                    />
-                  </label>
                 </>
               )}
               <label>
@@ -7017,7 +7025,7 @@ export default function App({ user = null, onSignOut = null }) {
                             ? `Web app · ${surface.url}`
                             : surface.appType === 'Extension'
                               ? `Extension in ${surface.parentApp} · ${surface.appName}`
-                              : `Desktop app · ${surface.processName}`}
+                              : `Desktop app · ${surface.appName}`}
                         </strong>
                         <small>
                           {!surface.parentReady
@@ -7046,7 +7054,7 @@ export default function App({ user = null, onSignOut = null }) {
                   <thead>
                     <tr>
                       <th>Inventory Item</th>
-                      <th>Process</th>
+                      <th>Plans</th>
                       <th>Owner</th>
                       <th>Email</th>
                       <th>Type</th>
@@ -7057,23 +7065,40 @@ export default function App({ user = null, onSignOut = null }) {
                   </thead>
                   <tbody>
                     {licensedApps.map((app) => (
-                      <tr key={app.id}>
+                      <tr className="inventory-app-row" key={app.id} onClick={() => openAppPlans(app)}>
                         <td>
                           <div className="device-identity">
                             <AppInventoryIcon appName={app.appName} className="inventory-list-icon" />
                             <div>
-                              <strong>{app.appName}</strong>
+                              <button
+                                className="inventory-app-open"
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openAppPlans(app);
+                                }}
+                              >
+                                {app.appName}
+                              </button>
                               <span>{app.appType}</span>
                             </div>
                           </div>
                         </td>
-                        <td>{app.appType === 'Web URL' ? app.url : app.processName}</td>
+                        <td>
+                          {app.bundledWith ? (
+                            <span className="muted-value">Included</span>
+                          ) : planSummary(app).missing ? (
+                            <span className="status-badge status-reclaimable">Plans missing</span>
+                          ) : (
+                            planSummary(app).label
+                          )}
+                        </td>
                         <td>{app.owner}</td>
                         <td>{app.ownerEmail}</td>
                         <td>{app.appType}</td>
                         <td>{app.appType === 'Extension' ? app.parentApp : '-'}</td>
                         <td>{formatCurrency(app.monthlyCost)}</td>
-                        <td>
+                        <td onClick={(event) => event.stopPropagation()}>
                           <div className="policy-actions">
                             <button
                               aria-label={`Edit ${app.appName} inventory item`}
@@ -7109,6 +7134,16 @@ export default function App({ user = null, onSignOut = null }) {
             inventory={licensedApps}
             isOpen={isAppCatalogOpen}
             onClose={() => setIsAppCatalogOpen(false)}
+          />
+        )}
+
+        {activeView === 'apps-inventory' && licensedApps.some((app) => app.id === plansAppId) && (
+          <AppPlansModal
+            app={licensedApps.find((app) => app.id === plansAppId)}
+            bundledApps={licensedApps.filter((app) => app.bundledWith === plansAppId)}
+            key={plansAppId}
+            onClose={() => setPlansAppId('')}
+            onSave={handleSaveAppPlans}
           />
         )}
 

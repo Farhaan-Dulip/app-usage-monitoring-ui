@@ -121,7 +121,7 @@ export default function InventoryAppPicker({ apps, value, onChange }) {
               <AppInventoryIcon appName={app.appName} className="app-name-picker-icon" />
               <span className="app-name-picker-text">
                 <strong>{app.appName}</strong>
-                <small>{app.processName}</small>
+                <small>{app.appType}</small>
               </span>
             </li>
           ))}
