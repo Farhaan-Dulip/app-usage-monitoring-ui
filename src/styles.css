@@ -6627,7 +6627,10 @@ label.platform-contract-check {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin: -16px -18px 14px;
+  padding: 14px 18px;
+  border-radius: 11px 11px 0 0;
+  background: #eef4fb;
 }
 
 .request-card-head strong {
@@ -7605,4 +7608,60 @@ label.platform-contract-check {
 
 .onboard-policy-chip button:hover {
   background: rgba(20, 83, 45, 0.12);
+}
+
+/* Workflow Management: the workflows on the left, the chosen roadmap on the right. */
+.workflow-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.workflow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-item {
+  padding: 10px 12px;
+  border: 1px solid #d8e1ee;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-item strong,
+.workflow-item small {
+  display: block;
+}
+
+.workflow-item small {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.workflow-item.active {
+  border-color: #15803d;
+  background: #f0fdf4;
+}
+
+.workflow-card {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.workflow-example {
+  font-style: italic;
+}
+
+@media (max-width: 1100px) {
+  .workflow-layout {
+    grid-template-columns: 1fr;
+  }
 }

@@ -1,0 +1,70 @@
+{
+  "id": "xyz-tool-request",
+  "name": "XYZ tool request and approval",
+  "version": 1,
+  "trigger": {
+    "type": "request",
+    "source": ["ai-assistant", "email"],
+    "app": "XYZ Tool"
+  },
+  "approver": {
+    "role": "app-owner",
+    "fallback": "manager"
+  },
+  "steps": [
+    {
+      "id": "raise",
+      "title": "Request raised",
+      "owner": "requester",
+      "type": "raise",
+      "status": "not-started",
+      "detail": "Requester asks for XYZ Tool in the AI assistant or by email"
+    },
+    {
+      "id": "verify",
+      "title": "Verify existing access & eligibility",
+      "owner": "Licence owners",
+      "type": "check",
+      "status": "not-started",
+      "detail": "Check whether XYZ Tool is already held and the requester is eligible",
+      "onFail": "stop"
+    },
+    {
+      "id": "approve",
+      "title": "App owner approves",
+      "owner": "App owner",
+      "type": "approval",
+      "status": "not-started",
+      "detail": "App owner approves or declines with a note",
+      "onDecline": "stop"
+    },
+    {
+      "id": "seat",
+      "title": "Seat allocated",
+      "owner": "Licence owners",
+      "type": "task",
+      "status": "not-started",
+      "detail": "Seat assigned through the XYZ Tool admin API or ServiceNow"
+    },
+    {
+      "id": "track",
+      "title": "Track usage",
+      "owner": "Deploy Tracker",
+      "type": "task",
+      "status": "not-started",
+      "detail": "Tracker config deployed to the PC; usage measured from day one"
+    },
+    {
+      "id": "notify",
+      "title": "Requester notified",
+      "owner": "AllionOne",
+      "type": "notify",
+      "status": "not-started",
+      "detail": "Confirmation email to the requester"
+    }
+  ],
+  "notifications": {
+    "onDecline": "requester",
+    "onComplete": "requester"
+  }
+}

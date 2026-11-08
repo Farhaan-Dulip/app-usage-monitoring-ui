@@ -36,6 +36,7 @@ import { createIntegrationsRouter } from './services/aiTools/integrations.js';
 import { buildDashboard, licenseAppList } from './services/reports/dashboards.js';
 import { clearLicenseCache } from './services/reports/licenseConnectors.js';
 import { buildPlatformDashboard, ContractError, deleteContract, platformOverview, saveContract, savedContracts } from './services/platforms/index.js';
+import { deleteWorkflow, listWorkflows, saveWorkflow, WorkflowError } from './services/workflows/index.js';
 import { buildTrackerReport } from './services/reports/trackerReport.js';
 import { authConfig, createAuthRouter, requireSession } from './services/portalAuth.js';
 import {
@@ -130,6 +131,7 @@ const reportSettings = database.collection('report_settings');
 const agentConfigurations = database.collection('agent_configurations');
 const appSettings = database.collection('app_settings');
 const assistantRequests = database.collection('assistant_requests');
+const workflowDefinitions = database.collection('workflow_definitions');
 const applicationTimeZone = process.env.APP_TIME_ZONE || 'Asia/Colombo';
 const assistantAgentUrl =
   process.env.ASSISTANT_AGENT_URL || 'http://localhost:3002/api/assistant/chat';
@@ -696,6 +698,38 @@ app.get('/api/license-requests', async (_req, res) => {
     return res.json({ requests: requests.map(serializeLicenseRequest) });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to load license requests' });
+  }
+});
+
+// Workflow Management: workflow definitions (steps each request or policy
+// violation runs through). The samples load the first time the list is empty.
+app.get('/api/workflows', async (_req, res) => {
+  try {
+    return res.json({ workflows: await listWorkflows(workflowDefinitions) });
+  } catch (error) {
+    console.error('Workflows failed to load:', error.message);
+    return res.status(500).json({ error: 'Unable to load workflows' });
+  }
+});
+
+app.put('/api/workflows/:id', async (req, res) => {
+  if (req.body?.id !== req.params.id) return res.status(400).json({ error: 'The workflow id does not match the address' });
+  try {
+    return res.json({ workflow: await saveWorkflow(workflowDefinitions, req.body) });
+  } catch (error) {
+    if (error instanceof WorkflowError) return res.status(400).json({ error: error.message });
+    console.error('Workflow failed to save:', error.message);
+    return res.status(500).json({ error: 'Unable to save the workflow' });
+  }
+});
+
+app.delete('/api/workflows/:id', async (req, res) => {
+  try {
+    const deleted = await deleteWorkflow(workflowDefinitions, req.params.id);
+    return deleted ? res.json({ deleted: true }) : res.status(404).json({ error: 'No workflow with that id' });
+  } catch (error) {
+    console.error('Workflow failed to delete:', error.message);
+    return res.status(500).json({ error: 'Unable to delete the workflow' });
   }
 });
 
@@ -1287,6 +1321,7 @@ export async function initialize() {
     reportSettings.createIndex({ client_id: 1 }, { sparse: true }),
     appSettings.createIndex({ client_id: 1 }, { sparse: true }),
     assistantRequests.createIndex({ clientId: 1, createdAt: -1 }),
+    workflowDefinitions.createIndex({ id: 1 }, { unique: true }),
     assistantRequests.createIndex({ sourceMessageId: 1 }, { unique: true, sparse: true }),
     devices.createIndex({ deviceId: 1 }, { unique: true }),
     deviceConfigOutbox.createIndex({ grantId: 1 }, { unique: true }),

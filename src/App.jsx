@@ -39,6 +39,7 @@ import { sampleDeviceRows, sampleLicenseGroups } from './data/sampleLicenseGroup
 import LicenseOverview from './components/LicenseOverview';
 import DeviceSeatList from './components/DeviceSeatList';
 import RequestRoadmap from './components/RequestRoadmap';
+import WorkflowManagement from './components/WorkflowManagement';
 import { OBJECTIVE_STATUS, buildRoadmap } from './utils/requestRoadmap';
 import { sampleRequests, sampleWorkflows } from './data/sampleRequests';
 import PersonAvatar from './components/PersonAvatar';
@@ -3249,6 +3250,12 @@ export default function App({ user = null, onSignOut = null }) {
       description:
         'Review requests routed to each app owner or administrator during license onboarding.',
     },
+    'workflow-management': {
+      eyebrow: 'Workflow governance',
+      title: 'Workflow Management',
+      description:
+        'Define the steps each licence request and policy violation runs through, who approves, and what happens next.',
+    },
     'ai-assistant': {
       eyebrow: 'Grounded license intelligence',
       title: 'AI Assistant',
@@ -5385,6 +5392,8 @@ export default function App({ user = null, onSignOut = null }) {
           </section>
           </>
         )}
+
+        {activeView === 'workflow-management' && <WorkflowManagement />}
 
         {activeView === 'license-approvals' && (() => {
           const allRequests = showSampleLicenses ? [...sampleWorkflows(), ...licenseRequests, ...sampleRequests()] : licenseRequests;

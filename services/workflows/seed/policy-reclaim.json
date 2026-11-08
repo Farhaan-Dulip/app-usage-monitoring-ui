@@ -1,0 +1,61 @@
+{
+  "id": "policy-reclaim",
+  "name": "Policy violation: reclaim or downsize",
+  "version": 1,
+  "trigger": {
+    "type": "policy-violation",
+    "policyAction": ["Prior Alert", "Downsize", "Reclaim"]
+  },
+  "approver": {
+    "role": "licence-owner",
+    "fallback": "manager"
+  },
+  "rules": {
+    "maxPriorAlerts": 3,
+    "afterMaxAlerts": "reclaim-request"
+  },
+  "steps": [
+    {
+      "id": "detect",
+      "title": "Low use detected",
+      "owner": "AllionOne",
+      "type": "check",
+      "status": "not-started",
+      "detail": "A policy rule is not met for the seat"
+    },
+    {
+      "id": "alert",
+      "title": "Alert & justify",
+      "owner": "Seat holder",
+      "type": "notify",
+      "status": "not-started",
+      "detail": "Alert sent asking for a business justification; repeats up to 3 times",
+      "onJustified": "stop"
+    },
+    {
+      "id": "approve",
+      "title": "Licence owner approves",
+      "owner": "Licence owner",
+      "type": "approval",
+      "status": "not-started",
+      "detail": "Owner approves the Downsize or Reclaim action",
+      "onDecline": "stop"
+    },
+    {
+      "id": "action",
+      "title": "Downsize or reclaim",
+      "owner": "Licence owners",
+      "type": "task",
+      "status": "not-started",
+      "detail": "Seat downsized or reclaimed and freed for reassignment"
+    },
+    {
+      "id": "email",
+      "title": "Email sent",
+      "owner": "AllionOne",
+      "type": "notify",
+      "status": "not-started",
+      "detail": "Email to the licence owner and seat holder when the action is reached"
+    }
+  ]
+}

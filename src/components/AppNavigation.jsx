@@ -12,6 +12,7 @@ function NavIcon({ type }) {
     approvals: <><path d="M4 3.25h8v9.5H4z" /><path d="m6 8 1.25 1.25L10 6.5" /><path d="M6 11.5h4" /></>,
     inventory: <><path d="M3 4.5 8 2.5l5 2-5 2z" /><path d="M3 4.5v6.5l5 2.25 5-2.25V4.5" /><path d="M8 6.5v6.75" /></>,
     aitools: <><path d="M8 2.75 9.2 6.3l3.55 1.2L9.2 8.7 8 12.25 6.8 8.7 3.25 7.5 6.8 6.3z" /><path d="M12.25 11.25v2.5M11 12.5h2.5" /></>,
+    workflow: <><circle cx="4" cy="4" r="1.5" /><circle cx="12" cy="8" r="1.5" /><circle cx="4" cy="12" r="1.5" /><path d="M5.5 4h2.5a2 2 0 0 1 2 2v.5" /><path d="M10 9.5v.5a2 2 0 0 1-2 2H5.5" /></>,
     signout: <><path d="M6.5 3.25h-2.25a1 1 0 0 0-1 1v7.5a1 1 0 0 0 1 1H6.5" /><path d="M9.75 5.25 12.5 8l-2.75 2.75" /><path d="M12.5 8H6.25" /></>,
     settings: <><circle cx="8" cy="8" r="2.25" /><path d="M8 2.25v1.2M8 12.55v1.2M2.25 8h1.2M12.55 8h1.2" /><path d="m3.95 3.95.85.85m6.4 6.4.85.85m0-8.1-.85.85m-6.4 6.4-.85.85" /></>,
   };
