@@ -3018,9 +3018,12 @@ export default function App({ user = null, onSignOut = null }) {
   const [ruleDraft, setRuleDraft] = useState(() => ruleToDraft(NEW_POLICY_RULE));
   const [appRuleStatus, setAppRuleStatus] = useState('');
   const [onboardAppId, setOnboardAppId] = useState('');
-  const [onboardPolicyId, setOnboardPolicyId] = useState('');
+  // The policies chosen for the app being onboarded, in the order picked.
+  const [onboardPolicyIds, setOnboardPolicyIds] = useState([]);
   // The policy open in App Rules: an id, '__new__' for a new one, '' when none is open.
   const [rulePolicyId, setRulePolicyId] = useState('');
+  // The action chosen for the policy in App Rules: warn, downsize or reclaim.
+  const [ruleAction, setRuleAction] = useState('Reclaim');
   const [rulePolicyName, setRulePolicyName] = useState('');
   const [onboardStatus, setOnboardStatus] = useState('');
   const [licensedApps, setLicensedApps] = useState([]);
@@ -4757,11 +4760,17 @@ export default function App({ user = null, onSignOut = null }) {
   // the policy each is evaluated with.
   const onboardApp = licensedApps.find((item) => item.id === onboardAppId) || null;
 
+  // The policies an app is evaluated with: all of them, or its one policy from before.
+  const policiesOf = (app) => {
+    const ids = app?.policyIds?.length ? app.policyIds : app?.policyId ? [app.policyId] : [];
+    return appPolicies(app).filter((policy) => ids.includes(policy.id));
+  };
+
   const pickOnboardApp = (appId) => {
     const app = licensedApps.find((item) => item.id === appId);
     setOnboardStatus('');
     setOnboardAppId(appId);
-    setOnboardPolicyId(app?.policyId || appPolicies(app)[0]?.id || '');
+    setOnboardPolicyIds(policiesOf(app).map((policy) => policy.id));
   };
 
   const handleOnboardApp = (event) => {
@@ -4770,23 +4779,27 @@ export default function App({ user = null, onSignOut = null }) {
       setOnboardStatus('Choose an app from Enterprise Apps Inventory.');
       return;
     }
-    const policy = appPolicies(onboardApp).find((item) => item.id === onboardPolicyId) || null;
-    if (!policy) {
+    const chosen = appPolicies(onboardApp).filter((item) => onboardPolicyIds.includes(item.id));
+    if (chosen.length === 0) {
       setOnboardStatus(`Create a policy for ${onboardApp.appName} in App Rules first.`);
       return;
     }
     const bundled = licensedApps.filter((item) => item.bundledWith === onboardApp.id && item.appType !== 'Web URL');
     const wasOnboarded = Boolean(onboardApp.onboarded);
     setLicensedApps((currentApps) =>
-      currentApps.map((item) => (item.id === onboardApp.id ? { ...item, onboarded: true, policyId: policy.id } : item))
+      currentApps.map((item) =>
+        item.id === onboardApp.id
+          ? { ...item, onboarded: true, policyId: chosen[0].id, policyIds: chosen.map((policy) => policy.id) }
+          : item
+      )
     );
     setOnboardStatus(
       `${onboardApp.appName} ${wasOnboarded ? 'updated' : 'onboarded'}${
         bundled.length > 0 && !wasOnboarded ? `, with ${bundled.map((item) => item.appName).join(' and ')}` : ''
-      }, using the ${policy.name} policy.`
+      }, using the ${chosen.map((policy) => policy.name).join(', ')} ${chosen.length > 1 ? 'policies' : 'policy'}.`
     );
     setOnboardAppId('');
-    setOnboardPolicyId('');
+    setOnboardPolicyIds([]);
   };
 
   const handleRemoveOnboardedApp = (appId) => {
@@ -4869,6 +4882,7 @@ export default function App({ user = null, onSignOut = null }) {
               ...item,
               policies: appPolicies(item).filter((entry) => entry.id !== removedId),
               policyId: item.policyId === removedId ? '' : item.policyId,
+              policyIds: (item.policyIds || []).filter((id) => id !== removedId),
             }
           : item
       )
@@ -5482,6 +5496,50 @@ export default function App({ user = null, onSignOut = null }) {
                     onClick={(event) => event.stopPropagation()}
                   >
                     <button aria-label="Close" className="approval-modal-close" type="button" onClick={close}>×</button>
+                    {request.reclaim ? (
+                    <div className="approval-modal-details">
+                      <p className="eyebrow">Reclaim details</p>
+                      <h3>{request.requestedApp}</h3>
+                      <dl>
+                        <div><dt>Detected by</dt><dd>AllionOne policy rules</dd></div>
+                        <div><dt>Seat holder</dt><dd>{request.requesterName}{request.requesterEmail ? ` · ${request.requesterEmail}` : ''}</dd></div>
+                        <div><dt>PC name</dt><dd>{request.targetDevice?.pcName || '—'}</dd></div>
+                        <div><dt>Detected</dt><dd>{request.createdAt ? new Date(request.createdAt).toLocaleString() : '—'}</dd></div>
+                        <div className="approval-verify-block">
+                          <dt>Policy monitored</dt>
+                          <dd>
+                            <strong className="approval-reclaim-policy">{request.reclaim.policy}</strong>
+                            <span className="approval-reclaim-period">{request.reclaim.period}</span>
+                            <ul className="approval-reclaim-rules">
+                              {request.reclaim.rules.map((rule) => (
+                                <li key={rule.label}>
+                                  <span
+                                    aria-label={rule.met ? 'Rule met' : 'Rule not met'}
+                                    className={`approval-verify-icon ${rule.met ? 'approval-verify-pass' : 'approval-verify-fail'}`}
+                                  >
+                                    {rule.met ? '✓' : '✕'}
+                                  </span>
+                                  <span>
+                                    <strong>{rule.label}</strong>
+                                    <small>Needs {rule.target} · Actual {rule.actual}</small>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </dd>
+                        </div>
+                        <div className="approval-verify-block">
+                          <dt>Why this licence should be reclaimed</dt>
+                          <dd>
+                            <ul className="approval-reclaim-reasons">
+                              {request.reclaim.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                            </ul>
+                          </dd>
+                        </div>
+                        <div><dt>Saving if reclaimed</dt><dd>{request.reclaim.saving}</dd></div>
+                      </dl>
+                    </div>
+                    ) : (
                     <div className="approval-modal-details">
                       <p className="eyebrow">Request details</p>
                       <h3>{request.requestedApp}</h3>
@@ -5517,6 +5575,7 @@ export default function App({ user = null, onSignOut = null }) {
                         </div>
                       </dl>
                     </div>
+                    )}
                     <div className="approval-modal-decide">
                       <div className="approval-modal-approver">
                         <PersonAvatar name={request.approvingManagerName} />
@@ -5537,7 +5596,7 @@ export default function App({ user = null, onSignOut = null }) {
                       </label>
                       <div className="approval-modal-actions">
                         <button className="approval-decline" disabled={!canDecide || !approverNote.trim()} type="button" onClick={() => decide('decline')}>Decline</button>
-                        <button className="approval-approve" disabled={!canDecide} type="button" onClick={() => decide('approve')}>Approve</button>
+                        <button className="approval-approve" disabled={!canDecide} type="button" onClick={() => decide('approve')}>{request.reclaim ? 'Approve reclaim' : 'Approve'}</button>
                       </div>
                     </div>
                   </div>
@@ -5820,6 +5879,7 @@ export default function App({ user = null, onSignOut = null }) {
           <LicenseOverview
               inventoryApps={licensedApps}
               rows={licenseProductRows}
+              defaultStatus="Reclaimable"
               showSample={showSampleLicenses}
               subtitle="Seats bought, seats in use on PCs, and what each costs. Open a product to see the evidence behind every seat."
               title="Licenses"
@@ -6537,17 +6597,39 @@ export default function App({ user = null, onSignOut = null }) {
                 <span>Policy</span>
                 <select
                   disabled={!onboardApp}
-                  value={onboardPolicyId}
+                  value=""
                   onChange={(event) => {
+                    const id = event.target.value;
+                    if (!id) return;
                     setOnboardStatus('');
-                    setOnboardPolicyId(event.target.value);
+                    setOnboardPolicyIds((current) => (current.includes(id) ? current : [...current, id]));
                   }}
                 >
-                  {onboardApp && appPolicies(onboardApp).length === 0 && <option value="">No policies yet</option>}
-                  {appPolicies(onboardApp).map((policy) => (
-                    <option key={policy.id} value={policy.id}>{policy.name}</option>
-                  ))}
+                  <option value="">{onboardApp && appPolicies(onboardApp).length === 0 ? 'No policies yet' : 'Add a policy'}</option>
+                  {appPolicies(onboardApp)
+                    .filter((policy) => !onboardPolicyIds.includes(policy.id))
+                    .map((policy) => (
+                      <option key={policy.id} value={policy.id}>{policy.name}</option>
+                    ))}
                 </select>
+                {onboardPolicyIds.length > 0 && (
+                  <div className="onboard-policy-chips">
+                    {appPolicies(onboardApp)
+                      .filter((policy) => onboardPolicyIds.includes(policy.id))
+                      .map((policy) => (
+                        <span className="onboard-policy-chip" key={policy.id}>
+                          {policy.name}
+                          <button
+                            aria-label={`Remove ${policy.name}`}
+                            type="button"
+                            onClick={() => setOnboardPolicyIds((current) => current.filter((id) => id !== policy.id))}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                  </div>
+                )}
               </label>
               <button className="deploy-agent-button" type="submit">
                 <span className="action-symbol">+</span>
@@ -6583,7 +6665,9 @@ export default function App({ user = null, onSignOut = null }) {
                               </div>
                             </div>
                           </td>
-                          <td className={policy ? undefined : 'app-rules-missing'}>{policy ? policy.name : 'No policy: not tracked'}</td>
+                          <td className={policy ? undefined : 'app-rules-missing'}>
+                            {policy ? policiesOf(app).map((item) => item.name).join(', ') : 'No policy: not tracked'}
+                          </td>
                           <td>{formatCurrency(Number(app.monthlyCost) || 0)}</td>
                           <td>
                             <div className="policy-actions">
@@ -6645,6 +6729,7 @@ export default function App({ user = null, onSignOut = null }) {
                   />
                 </label>
                 {ruleApp && (
+                  <div className="app-rule-policy-stack">
                   <label>
                     <span>Policy</span>
                     {rulePolicyId === NEW_POLICY ? (
@@ -6686,6 +6771,14 @@ export default function App({ user = null, onSignOut = null }) {
                       </select>
                     )}
                   </label>
+                  <label>
+                    <span>Action</span>
+                    <select aria-label="Action for this policy" value={ruleAction} onChange={(event) => setRuleAction(event.target.value)}>
+                      <option>Downsize</option>
+                      <option>Reclaim</option>
+                    </select>
+                  </label>
+                  </div>
                 )}
               </div>
               {editingRuleAppId && (

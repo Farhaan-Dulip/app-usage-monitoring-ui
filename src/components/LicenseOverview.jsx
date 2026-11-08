@@ -52,6 +52,7 @@ function statusClass(status) {
 // behind each seat's status; "All software" goes back.
 export default function LicenseOverview({
   rows,
+  defaultStatus = 'All',
   inventoryApps = [],
   showSample,
   onToggleSample,
@@ -69,7 +70,7 @@ export default function LicenseOverview({
   const labels = { ...LICENSE_LABELS, ...labelOverrides };
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
-  const [status, setStatus] = useState('All');
+  const [status, setStatus] = useState(defaultStatus);
   const [renewal, setRenewal] = useState('all');
   const [sort, setSort] = useState({ key: 'name', direction: 'asc' });
   const [viewRowId, setViewRowId] = useState(initialRowId);
@@ -148,7 +149,7 @@ export default function LicenseOverview({
   const reset = () => {
     setSearch('');
     setCategory('All');
-    setStatus('All');
+    setStatus(defaultStatus);
     setRenewal('all');
   };
   const toggleSort = (key) =>

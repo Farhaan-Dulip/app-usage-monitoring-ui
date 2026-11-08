@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import AllionMark from './components/AllionMark';
 import ProjectAccessWorkflow from './components/ProjectAccessWorkflow';
-import { PROJECT_EMBED, mockAssistantReply } from './data/mockAssistant';
+import VSCodeAccessWorkflow from './components/VSCodeAccessWorkflow';
+import { PROJECT_EMBED, VSCODE_EMBED, mockAssistantReply } from './data/mockAssistant';
+
+// Workflow views a reply can show below its text, by the reply's embed id.
+const EMBEDS = {
+  [PROJECT_EMBED]: ProjectAccessWorkflow,
+  [VSCODE_EMBED]: VSCodeAccessWorkflow,
+};
 
 // Sample replies with topics ('## '), sub-topics ('### ') and bullets ('- ').
 function RichText({ text }) {
@@ -15,6 +22,15 @@ function RichText({ text }) {
 }
 
 const REQUESTER_PROFILE_STORAGE_KEY = 'app-usage-monitoring-requester-profile';
+
+// Sample prompts under Request workflow; clicking one puts it in the message box.
+const SAMPLE_PROMPTS = [
+  'I need to work on payments integrations project and i want to make sure i have necessary tools and apps and licenses to work on that project',
+  'Which licences am I paying for that nobody uses?',
+  'Why was my Claude seat flagged for reclaim?',
+  'How much can we save this month?',
+  'I need license for VS Code Enterprise app',
+];
 // The left panel collapsed to a slim rail (remembered per browser).
 const SIDEBAR_STORAGE_KEY = 'allionone-assistant-sidebar-collapsed';
 // Recent chats are kept in this browser only (per signed-in user).
@@ -298,23 +314,21 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
         </div>
         <div className="assistant-scope-note">
           <strong>Request workflow</strong>
-          <p>Ask for an app in your own words, e.g. “I need access to Postman”. The request goes to the app owner for approval.</p>
-        </div>
-        <div className="assistant-requester-profile">
-          <span>Requester details</span>
-          <input
-            aria-label="Requester name"
-            value={requester.name}
-            onChange={(event) => setRequester((current) => ({ ...current, name: event.target.value }))}
-            placeholder="Your name"
-          />
-          <input
-            aria-label="Requester work email"
-            type="email"
-            value={requester.email}
-            onChange={(event) => setRequester((current) => ({ ...current, email: event.target.value }))}
-            placeholder="you@company.com"
-          />
+          <ul className="assistant-sample-prompts">
+            {SAMPLE_PROMPTS.map((prompt) => (
+              <li key={prompt}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(prompt);
+                    composerRef.current?.focus();
+                  }}
+                >
+                  {prompt}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
         <div className="assistant-request-history">
           <span>Recent requests</span>
@@ -384,11 +398,6 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
                 <div className="assistant-message-label">
                   {message.role === 'assistant' ? 'AllionOne AI' : 'You'}
                 </div>
-                {message.embed === PROJECT_EMBED && (
-                  <div className="assistant-embed">
-                    <ProjectAccessWorkflow />
-                  </div>
-                )}
                 <div className={`assistant-message-bubble${message.format === 'rich' ? ' assistant-rich' : ''}`}>
                   {message.format === 'rich' && <RichText text={message.content} />}
                   {message.format !== 'rich' && message.content.split('\n').map((line, lineIndex) => (
@@ -411,6 +420,14 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
                       : ''}
                   </small>
                 )}
+                {message.embed && EMBEDS[message.embed] && (() => {
+                  const Embed = EMBEDS[message.embed];
+                  return (
+                    <div className="assistant-embed">
+                      <Embed />
+                    </div>
+                  );
+                })()}
               </div>
             ))}
             {sendingId === active.id && (

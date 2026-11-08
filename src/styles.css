@@ -5952,6 +5952,8 @@ label.platform-contract-check {
   grid-template-columns: repeat(2, minmax(200px, 420px));
   /* App Name on the left, Policy in the right corner. */
   justify-content: space-between;
+  /* Both fields start at the top, so App Name sits level with Policy. */
+  align-items: start;
 }
 
 .app-rule-new-policy {
@@ -7477,4 +7479,130 @@ label.platform-contract-check {
   .device-seat-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* Approval modal for a reclaim: the policy rules checked and the reasons. */
+.approval-reclaim-policy {
+  display: block;
+  font-size: 13.5px;
+  color: #0f172a;
+}
+
+.approval-reclaim-period {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.approval-reclaim-rules {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-reclaim-rules li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.approval-reclaim-rules li > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.approval-reclaim-rules strong {
+  font-size: 13.5px;
+  color: #0f172a;
+}
+
+.approval-reclaim-rules small {
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.approval-reclaim-reasons {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #0f172a;
+}
+
+/* AI assistant: sample prompts under Request workflow. */
+.assistant-sample-prompts {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-sample-prompts button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d8e1ee;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-sample-prompts button:hover {
+  border-color: #15803d;
+  background: #f0fdf4;
+}
+
+/* App Rules: the Action drop-down sits under the Policy drop-down. */
+.app-rule-policy-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Onboard Apps: the policies picked for an app, each removable. */
+.onboard-policy-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.onboard-policy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: #e6f4ec;
+  color: #14532d;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.onboard-policy-chip button {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.onboard-policy-chip button:hover {
+  background: rgba(20, 83, 45, 0.12);
 }

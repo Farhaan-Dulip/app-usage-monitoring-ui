@@ -14,6 +14,40 @@ export function sampleRequests(now = Date.now()) {
     ...fields,
   });
   return [
+    // A Claude seat the policy rules flagged for reclaim, waiting for the
+    // manager to approve it. The modal shows the rules and the reasons.
+    base('claude-reclaim', {
+      kind: 'Reclaim',
+      requesterName: 'Kasun Perera',
+      requesterEmail: 'kasun.perera@example.com',
+      requestedApp: 'Claude licence reclaim',
+      reason: 'System detected low use of this Claude seat against the Claude usage policy.',
+      status: 'pending_approval',
+      source: 'system',
+      createdAt: ago(2),
+      targetDevice: { pcName: 'SAMPLE-ENG-07' },
+      roadmap: [
+        { id: 'flagged', title: 'Low use detected for Claude licence', owner: 'AllionOne', detail: '1.2h active in 30 days; 2 of 3 policy rules not met', status: 'done' },
+        { id: 'justify', title: 'Alert & justification', owner: 'Kasun Perera', detail: '3 alerts sent, no justification given', status: 'done' },
+        { id: 'approval', title: 'Manager approves reclaim', owner: 'Maya Fernando', detail: 'Waiting for the manager to decide', status: 'current' },
+        { id: 'reclaim', title: 'Seat reclaimed', owner: 'Licence owners', detail: 'Seat freed for reassignment', status: 'pending' },
+      ],
+      reclaim: {
+        policy: 'Claude · Engineering usage policy',
+        period: 'Checked over the last 30 days',
+        rules: [
+          { label: 'Active time on the PC', target: 'at least 8h', actual: '1.2h', met: false },
+          { label: 'Used Claude Code within', target: '7 days', actual: 'last used 41 days ago', met: false },
+          { label: 'Signed in within', target: '30 days', actual: 'signed in 12 days ago', met: true },
+        ],
+        reasons: [
+          'Active time was 1.2 hours in 30 days, well under the 8-hour minimum.',
+          'No Claude Code use for 41 days, so the seat adds nothing to their work.',
+          'Three low-use alerts were sent and no business justification came back.',
+        ],
+        saving: '$25 a month',
+      },
+    }),
     base('copilot-waiting', {
       requesterName: 'Nimali Silva',
       requesterEmail: 'nimali.silva@example.com',
@@ -50,16 +84,6 @@ export function sampleRequests(now = Date.now()) {
       status: 'awaiting_device',
       createdAt: ago(8),
       candidateDevices: [{ pcName: 'SAMPLE-ENG-06' }, { pcName: 'SAMPLE-QA-03' }],
-    }),
-    base('postman-email', {
-      requesterName: 'Dilan Jayasinghe',
-      requesterEmail: 'dilan.jayasinghe@example.com',
-      requestedApp: 'Postman',
-      reason: 'Needed to test the partner API integration.',
-      status: 'pending_approval',
-      source: 'email',
-      createdAt: ago(1),
-      targetDevice: { pcName: 'SAMPLE-QA-04' },
     }),
   ].map((request) => ({ ...request, _id: request.id }));
 }
