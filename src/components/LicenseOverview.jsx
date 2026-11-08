@@ -18,6 +18,28 @@ const count = (value) => (value === null || value === undefined ? '—' : new In
 const dateLabel = (date) =>
   date ? new Date(`${date}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
+// Wording for the End User Licenses page; the platform page passes its own.
+export const LICENSE_LABELS = {
+  nameColumn: 'Software Name',
+  total: 'Total Licenses',
+  assigned: 'Assigned',
+  available: 'Available',
+  cost: 'Est. Monthly Cost',
+  back: '← All software',
+  search: 'Search software (e.g., Codex, Postman…)',
+  seatColumn: 'License',
+  seatSearch: 'Search PC (e.g., SAMPLE-ENG-01)',
+  assignedOf: 'assigned of',
+  noTotal: 'No plan',
+  noTotalHint: 'Add plans in Enterprise Apps Inventory to see seats',
+  missingTotals: 'without plans',
+  savingsHint: 'Monthly cost of reclaimable seats',
+  empty: 'Add apps with plans in Enterprise Apps Inventory, or turn on Sample data.',
+  noMatch: 'No software matches these filters.',
+  noSeats: 'No seats deployed to a PC yet.',
+  noSeatMatch: 'No seats match these filters.',
+};
+
 function statusClass(status) {
   if (status === 'Active') return 'status-active';
   if (status === 'Reclaimable') return 'status-reclaimable';
@@ -28,13 +50,29 @@ function statusClass(status) {
 // License Utilizations: KPI cards, filters and one row per software product.
 // Clicking a product opens its seats in place of the table, with the evidence
 // behind each seat's status; "All software" goes back.
-export default function LicenseOverview({ rows, inventoryApps, showSample, onToggleSample, onSelectRow, title, subtitle }) {
+export default function LicenseOverview({
+  rows,
+  inventoryApps = [],
+  showSample,
+  onToggleSample,
+  onSelectRow,
+  title,
+  subtitle,
+  labels: labelOverrides,
+  onExploreSeat,
+  initialRowId = '',
+  amount = count,
+  // Optional list page (cards, filters and table) in place of the default one;
+  // an open row still shows the standard detail.
+  renderList,
+}) {
+  const labels = { ...LICENSE_LABELS, ...labelOverrides };
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
   const [status, setStatus] = useState('All');
   const [renewal, setRenewal] = useState('all');
   const [sort, setSort] = useState({ key: 'name', direction: 'asc' });
-  const [viewRowId, setViewRowId] = useState('');
+  const [viewRowId, setViewRowId] = useState(initialRowId);
   // The product open in detail, kept in step with the rows (Sample data on/off).
   const viewRow = rows.find((row) => row.id === viewRowId) || null;
   const openRow = (row) => setViewRowId(row.id);
@@ -51,6 +89,8 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
     onSelectRow?.({ ...viewRow, seats });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewRow?.id, viewRow?.seats.length, seatKey]);
+  // Leaving the page closes the open item for the rest of the page too.
+  useEffect(() => () => onSelectRow?.(null), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const categories = useMemo(() => ['All', ...new Set(rows.map((row) => row.category).sort())], [rows]);
   const filtered = useMemo(() => {
@@ -120,6 +160,8 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
       <div className="license-overview-head">
         {viewRow ? (
           <AppHeader
+            amount={amount}
+            labels={labels}
             row={viewRow}
             onBack={() => {
               setVisibleSeatIds(null);
@@ -132,50 +174,58 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
             <p>{subtitle}</p>
           </div>
         )}
-        <label className="sample-data-switch" title="Adds fictional products and seats to show every status and the vendor admin data">
-          <input checked={showSample} type="checkbox" onChange={(event) => onToggleSample(event.target.checked)} />
-          Sample data
-        </label>
+        {onToggleSample && (
+          <label className="sample-data-switch" title="Adds fictional products and seats to show every status and the vendor admin data">
+            <input checked={showSample} type="checkbox" onChange={(event) => onToggleSample(event.target.checked)} />
+            Sample data
+          </label>
+        )}
       </div>
 
+      {!viewRow && renderList ? (
+        renderList({ rows, openRow })
+      ) : (
+      <>
       <div className="license-kpis">
         <article className="license-kpi">
           <span className="license-kpi-icon"><LineIcon name="layers" size={22} /></span>
           <div>
-            <span>Total Licenses</span>
-            <strong>{count(totals.total)}</strong>
+            <span>{labels.total}</span>
+            <strong>{amount(totals.total)}</strong>
           </div>
-          {totals.missingPlans > 0 && <small className="license-kpi-chip" title="Apps without plans have no seat count">{totals.missingPlans} without plans</small>}
+          {totals.missingPlans > 0 && <small className="license-kpi-chip" title={labels.noTotalHint}>{totals.missingPlans} {labels.missingTotals}</small>}
         </article>
         <article className="license-kpi">
           <span className="license-kpi-icon"><LineIcon name="users" size={22} /></span>
           <div>
-            <span>Assigned</span>
-            <strong>{count(totals.assigned)}</strong>
+            <span>{labels.assigned}</span>
+            <strong>{amount(totals.assigned)}</strong>
           </div>
           {totals.assignedPct !== null && <small className="license-kpi-chip">{totals.assignedPct}%</small>}
         </article>
         <article className="license-kpi">
           <span className="license-kpi-icon"><LineIcon name="box" size={22} /></span>
           <div>
-            <span>Available</span>
-            <strong>{count(totals.available)}</strong>
+            <span>{labels.available}</span>
+            <strong>{amount(totals.available)}</strong>
           </div>
           {totals.availablePct !== null && <small className="license-kpi-chip">{totals.availablePct}%</small>}
         </article>
         <article className="license-kpi">
           <span className="license-kpi-icon"><LineIcon name="coins" size={22} /></span>
           <div>
-            <span>Est. Monthly Cost</span>
+            <span>{labels.cost}</span>
             <strong>{money(totals.cost)}</strong>
           </div>
-          {totals.savings > 0 && <small className="license-kpi-chip license-kpi-chip-good" title="Monthly cost of reclaimable seats">{money(totals.savings)} reclaimable</small>}
+          {totals.savings > 0 && <small className="license-kpi-chip license-kpi-chip-good" title={labels.savingsHint}>{money(totals.savings)} reclaimable</small>}
         </article>
       </div>
 
       {viewRow ? (
         <SeatsDetail
           inventoryApps={inventoryApps}
+          labels={labels}
+          onExploreSeat={onExploreSeat ? (pcName) => onExploreSeat(pcName, viewRow?.id) : undefined}
           key={viewRow.id}
           row={viewRow}
           onVisibleSeats={setVisibleSeatIds}
@@ -186,7 +236,7 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
         <label className="license-search">
           <span className="sr-only">Search software</span>
           <LineIcon name="search" size={16} />
-          <input placeholder="Search software (e.g., Codex, Postman…)" type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <input placeholder={labels.search} type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
         </label>
         <label>
           <span className="sr-only">Category</span>
@@ -214,10 +264,10 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
           <thead>
             <tr>
               {[
-                ['name', 'Software Name'],
-                ['totalSeats', 'Total Licenses'],
-                ['assigned', 'Assigned'],
-                ['available', 'Available'],
+                ['name', labels.nameColumn],
+                ['totalSeats', labels.total],
+                ['assigned', labels.assigned],
+                ['available', labels.available],
                 ['utilization', 'Utilization'],
                 ['renewalDate', 'Renewal Date'],
                 ...(showActive ? [['activeCount', 'Active']] : []),
@@ -256,12 +306,12 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
                       </div>
                     </div>
                   </td>
-                  <td>{count(row.totalSeats)}</td>
-                  <td>{count(row.assigned)}</td>
-                  <td>{count(row.available)}</td>
+                  <td>{amount(row.totalSeats)}</td>
+                  <td>{amount(row.assigned)}</td>
+                  <td>{amount(row.available)}</td>
                   <td>
                     {row.utilization === null ? (
-                      <span className="muted-value" title="Add plans in Enterprise Apps Inventory to see seats">No plan</span>
+                      <span className="muted-value" title={labels.noTotalHint}>{labels.noTotal}</span>
                     ) : (
                       <div className="license-utilization">
                         <strong>{row.utilization}%</strong>
@@ -306,7 +356,7 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
             {filtered.length === 0 && (
               <tr>
                 <td className="empty-state" colSpan={6 + Number(showActive) + Number(showReclaimable) + Number(showEvaluating)}>
-                  {rows.length === 0 ? 'Add apps with plans in Enterprise Apps Inventory, or turn on Sample data.' : 'No software matches these filters.'}
+                  {rows.length === 0 ? labels.empty : labels.noMatch}
                 </td>
               </tr>
             )}
@@ -316,13 +366,15 @@ export default function LicenseOverview({ rows, inventoryApps, showSample, onTog
 
       </>
       )}
+      </>
+      )}
     </section>
   );
 }
 
 
 // The open app's name and plan, in place of the page title.
-function AppHeader({ row, onBack }) {
+function AppHeader({ row, onBack, labels, amount }) {
   const headingRef = useRef(null);
   useEffect(() => {
     headingRef.current?.focus();
@@ -330,7 +382,7 @@ function AppHeader({ row, onBack }) {
   const days = daysUntil(row.renewalDate);
   return (
     <div className="license-app-header">
-      <button className="license-back" type="button" onClick={onBack}>← All software</button>
+      <button className="license-back" type="button" onClick={onBack}>{labels.back}</button>
       <div className="license-seats-head">
         <AppInventoryIcon appName={row.name} className="inventory-list-icon" />
         <div>
@@ -339,7 +391,7 @@ function AppHeader({ row, onBack }) {
             {row.sample && <small className="sample-row-tag">Sample</small>}
           </h2>
           <p>
-            {count(row.assigned)} assigned of {count(row.totalSeats)} · {money(row.monthlyCost)}/month
+            {amount(row.assigned)} {labels.assignedOf} {amount(row.totalSeats)} · {money(row.monthlyCost)}/month
             {row.renewalDate ? ` · renews ${dateLabel(row.renewalDate)}${days >= 0 ? ` (${days} days)` : ''}` : ''}
           </p>
         </div>
@@ -348,13 +400,13 @@ function AppHeader({ row, onBack }) {
   );
 }
 
-function SeatsDetail({ row, inventoryApps, onVisibleSeats }) {
+function SeatsDetail({ row, inventoryApps, onVisibleSeats, labels, onExploreSeat }) {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('All');
   const seats = useMemo(() => {
     const term = search.trim().toLowerCase();
     return row.seats.filter((seat) => {
-      if (term && !String(seat.pcName).toLowerCase().includes(term)) return false;
+      if (term && !`${seat.pcName} ${seat.name}`.toLowerCase().includes(term)) return false;
       if (status !== 'All' && seat.status !== status) return false;
       return true;
     });
@@ -375,7 +427,7 @@ function SeatsDetail({ row, inventoryApps, onVisibleSeats }) {
         <label className="license-search">
           <span className="sr-only">Search PCs</span>
           <LineIcon name="search" size={16} />
-          <input placeholder="Search PC (e.g., SAMPLE-ENG-01)" type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <input placeholder={labels.seatSearch} type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
         </label>
         <label>
           <span className="sr-only">Status</span>
@@ -385,7 +437,7 @@ function SeatsDetail({ row, inventoryApps, onVisibleSeats }) {
         </label>
         <button className="license-reset" type="button" onClick={reset}>Reset</button>
       </div>
-      {shown < row.assigned && shown > 0 && (
+      {row.sample && shown < row.assigned && shown > 0 && (
         <p className="license-seats-note">
           {filtering ? `${seats.length} of the ${shown} seats with tracker data match.` : `Showing the ${shown} seats with tracker data.`}
         </p>
@@ -394,16 +446,19 @@ function SeatsDetail({ row, inventoryApps, onVisibleSeats }) {
         <table className="license-seats-table">
           <thead>
             <tr>
-              <th>License</th>
+              <th>{labels.seatColumn}</th>
               <th>Status</th>
               <th>Evidence</th>
               <th>Savings</th>
+              {onExploreSeat && <th>Explore</th>}
             </tr>
           </thead>
           <tbody>
               {seats.map((seat) => {
-                const tracker = trackerEvidence(seat, inventoryApps);
-                const vendor = vendorEvidence(seat);
+                const lines = seat.evidence || [
+                  { ...trackerEvidence(seat, inventoryApps), icon: 'monitor' },
+                  { ...vendorEvidence(seat), icon: 'cloud' },
+                ];
                 return (
                   <tr key={seat.id}>
                     <td>
@@ -412,19 +467,30 @@ function SeatsDetail({ row, inventoryApps, onVisibleSeats }) {
                     </td>
                     <td><span className={`status-badge ${statusClass(seat.status)}`} title={seat.reclaimReason}>{seat.status}</span></td>
                     <td>
-                      <span className={`license-evidence license-evidence-${tracker.tone}`}><LineIcon name="monitor" size={15} /> {tracker.text}</span>
-                      <span className={`license-evidence license-evidence-${vendor.tone}`}><LineIcon name="cloud" size={15} /> {vendor.text}</span>
+                      {lines.map((line, index) => (
+                        <span className={`license-evidence license-evidence-${line.tone}`} key={index}>
+                          <LineIcon name={line.icon || 'cloud'} size={15} /> {line.text}
+                        </span>
+                      ))}
                     </td>
                     <td className={seat.savingsOpportunity > 0 ? 'savings-value' : 'muted-value'}>
                       {seat.savingsOpportunity > 0 ? `+${money(seat.savingsOpportunity)}` : money(0)}
                     </td>
+                    {onExploreSeat && (
+                      <td>
+                        <button className="explore-button" type="button" onClick={() => onExploreSeat(seat.pcName)}>
+                          <span className="action-symbol">›</span>
+                          Explore
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {seats.length === 0 && (
                 <tr>
-                  <td className="empty-state" colSpan="4">
-                    {shown === 0 ? 'No seats deployed to a PC yet.' : 'No seats match these filters.'}
+                  <td className="empty-state" colSpan={onExploreSeat ? 5 : 4}>
+                    {shown === 0 ? labels.noSeats : labels.noSeatMatch}
                   </td>
                 </tr>
               )}

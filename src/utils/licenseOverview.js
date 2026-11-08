@@ -98,7 +98,7 @@ export function buildProductRows({ groups, inventoryApps, now = Date.now() }) {
   return [...rows.values()].map(finishRow);
 }
 
-function finishRow(row) {
+export function finishRow(row) {
   const total = row.totalSeats;
   const seatsWith = (status) => row.seats.filter((seat) => seat.status === status).length;
   return {
@@ -204,4 +204,36 @@ export function vendorEvidence(group) {
     return { text: `${api}: ${neverSeen ? 'no use found' : checks.map(checkPhrase).join(', ')} ${count}`, tone: 'bad' };
   }
   return { text: `${api}: ${met.map(checkPhrase).join(', ')} ${count}`, tone: 'good' };
+}
+
+// Enterprise platforms (GET /api/platforms) as overview rows: the commitment is
+// the total, what has been consumed is the assigned part, and each platform's
+// resources (Advisor findings, warehouses, hosts...) are its "seats".
+export function platformRows(platforms = []) {
+  return platforms.map((platform) => {
+    const seats = (platform.resources || []).map((resource) => ({
+      id: resource.id,
+      name: resource.name,
+      pcName: resource.detail,
+      status: resource.status,
+      evidence: resource.evidence.map((line) => ({ ...line, icon: 'cloud' })),
+      savingsOpportunity: resource.savings || 0,
+    }));
+    const commitment = platform.contract?.commitmentAmount;
+    return finishRow({
+      id: platform.id,
+      productId: platform.id,
+      name: platform.name,
+      description: platform.licensing?.unit || platform.category,
+      category: platform.category,
+      totalSeats: commitment === null || commitment === undefined ? null : Number(commitment),
+      assigned: Number(platform.contract?.consumedAmount) || 0,
+      monthlyCost: Number(platform.forecastCost) || 0,
+      renewalDate: platform.contract?.endDate || null,
+      status: productStatus(seats),
+      seats,
+      // The contract view of the list page reads these.
+      platform,
+    });
+  });
 }

@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import AllionMark from './components/AllionMark';
+import ProjectAccessWorkflow from './components/ProjectAccessWorkflow';
+import { PROJECT_EMBED, mockAssistantReply } from './data/mockAssistant';
+
+// Sample replies with topics ('## '), sub-topics ('### ') and bullets ('- ').
+function RichText({ text }) {
+  return text.split('\n').map((line, index) => {
+    if (line.startsWith('## ')) return <h3 className="assistant-rich-topic" key={index}>{line.slice(3)}</h3>;
+    if (line.startsWith('### ')) return <h4 className="assistant-rich-subtopic" key={index}>{line.slice(4)}</h4>;
+    if (line.startsWith('- ')) return <span className="assistant-rich-bullet" key={index}>{line.slice(2)}</span>;
+    if (!line) return <span className="assistant-rich-gap" key={index} />;
+    return <p className="assistant-rich-text" key={index}>{line}</p>;
+  });
+}
 
 const REQUESTER_PROFILE_STORAGE_KEY = 'app-usage-monitoring-requester-profile';
 // The left panel collapsed to a slim rail (remembered per browser).
@@ -63,7 +76,7 @@ function SendIcon() {
   );
 }
 
-export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = '' }) {
+export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = '', sampleData = false }) {
   const historyKey = `${HISTORY_STORAGE_PREFIX}:${userEmail || 'local'}`;
   const [conversations, setConversations] = useState(() => readStorage(historyKey, []));
   const [activeId, setActiveId] = useState(null);
@@ -145,6 +158,18 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
       updateConversation(id, (conversation) => ({ ...conversation, messages: [...conversation.messages, userMessage] }));
     }
     const conversation = [...history, userMessage];
+    // Sample data: answer from the sample replies, without calling the server.
+    const mockReply = sampleData ? mockAssistantReply(content, history) : null;
+    if (mockReply) {
+      setDraft('');
+      setError('');
+      setSendingId(id);
+      // A short wait, so the sample reply reads like a live one.
+      await new Promise((resolve) => setTimeout(resolve, 1400 + Math.random() * 800));
+      updateConversation(id, (current) => ({ ...current, messages: [...current.messages, mockReply] }));
+      setSendingId(null);
+      return;
+    }
     setDraft('');
     setError('');
     setSendingId(id);
@@ -359,14 +384,22 @@ export default function ChatAssistant({ backendBaseUrl, clientId, userEmail = ''
                 <div className="assistant-message-label">
                   {message.role === 'assistant' ? 'AllionOne AI' : 'You'}
                 </div>
-                <div className="assistant-message-bubble">
-                  {message.content.split('\n').map((line, lineIndex) => (
+                {message.embed === PROJECT_EMBED && (
+                  <div className="assistant-embed">
+                    <ProjectAccessWorkflow />
+                  </div>
+                )}
+                <div className={`assistant-message-bubble${message.format === 'rich' ? ' assistant-rich' : ''}`}>
+                  {message.format === 'rich' && <RichText text={message.content} />}
+                  {message.format !== 'rich' && message.content.split('\n').map((line, lineIndex) => (
                     <span key={`${line}-${lineIndex}`}>{line || ' '}</span>
                   ))}
                 </div>
                 {message.source && (
                   <small className="assistant-message-source">
-                    {message.source === 'openai-mcp'
+                    {message.source === 'mock'
+                      ? 'Sample response'
+                      : message.source === 'openai-mcp'
                       ? 'AI Agent answer'
                       : message.source === 'workflow'
                         ? `Workflow request ${message.workflow?.status?.replace('_', ' ') || 'submitted'}`

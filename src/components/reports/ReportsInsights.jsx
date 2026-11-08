@@ -39,7 +39,6 @@ function Breadcrumb({ items }) {
 const HUB_CARDS = [
   { id: 'licenses', title: 'End User Apps', text: 'Seats, spend, activity and reclaim candidates for each licensed app, from its vendor admin API and the Trackers.', icon: '▦' },
   { id: 'platforms', title: 'Enterprise Infrastructure Platform', text: 'Cost, infrastructure insights, contracts and renewal deadlines for Azure, Snowflake and Datadog.', icon: '◈' },
-  { id: 'tracker', title: 'Tracker Usage', text: 'What the Trackers measured on PCs in the last 30 days: active and idle time by app, PC and day.', icon: '◷' },
   { id: 'ai-tools', title: 'AI Tools & Agents', text: 'Review connected AI tools, agent usage, seat activity, and integration health.', icon: '✦' },
   { id: 'builder', title: 'Custom Report Builder', text: 'Create a tailored report from the inventory, license, usage, and reclaim data that matters to your team.', icon: '≡' },
 ];
@@ -334,47 +333,9 @@ function AiToolDashboard({ tool }) {
   );
 }
 
-function TrackerUsage() {
-  const { data, error } = useJson('/api/reports/tracker-usage');
-  const connectedPcs = data?.kpis.find((kpi) => kpi.label === 'PCs reporting (30 days)')?.value || 0;
-  if (error) return <p className="ai-tool-note ai-tool-error">{error}</p>;
-  if (!data) return <p className="muted-value">Loading tracker usage…</p>;
-  return (
-    <>
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <h2>Tracker Usage</h2>
-            <p>Real telemetry from the Trackers over the last 30 days.</p>
-          </div>
-          <span className="tracker-connected-pcs">Connected PCs {connectedPcs}</span>
-        </div>
-        <KpiCards kpis={data.kpis} />
-      </section>
-      <section className="panel">
-        <ChartGrid charts={data.charts} />
-      </section>
-      <section className="panel">
-        <DataTable table={data.table} />
-        <DataTable
-          table={{
-            title: 'By app',
-            columns: [
-              { key: 'app', label: 'App', format: 'text' },
-              { key: 'hours', label: 'Active time', format: 'hours' },
-              { key: 'idleHours', label: 'Idle time', format: 'hours' },
-              { key: 'devices', label: 'PCs', format: 'number' },
-            ],
-            rows: data.appsTable.map((row) => ({ ...row, id: row.app })),
-          }}
-        />
-      </section>
-    </>
-  );
-}
-
 // Reports & Insights: card hub > End User Apps (apps > app dashboard),
-// Tracker Usage, and the existing Report Builder (passed in as `builder`).
+// Enterprise Infrastructure Platform, AI Tools & Agents, and the existing
+// Report Builder (passed in as `builder`).
 export default function ReportsInsights({ builder }) {
   const [view, setView] = useState('hub');
   const [app, setApp] = useState(null);
@@ -387,7 +348,6 @@ export default function ReportsInsights({ builder }) {
     app: [home, { label: 'End User Apps', onClick: () => { setView('licenses'); setApp(null); } }, { label: app?.name || '' }],
     platforms: [home, { label: 'Enterprise Infrastructure Platform' }],
     platform: [home, { label: 'Enterprise Infrastructure Platform', onClick: () => { setView('platforms'); setPlatform(null); } }, { label: platform?.name || '' }],
-    tracker: [home, { label: 'Tracker Usage' }],
     builder: [home, { label: 'Report Builder' }],
     'ai-tools': [home, { label: 'AI Tools & Agents' }],
     'ai-tool': [home, { label: 'AI Tools & Agents', onClick: () => { setView('ai-tools'); setTool(null); } }, { label: tool?.name || '' }],
@@ -404,7 +364,6 @@ export default function ReportsInsights({ builder }) {
       {view === 'ai-tool' && tool && <AiToolDashboard tool={tool} />}
       {view === 'platforms' && <PlatformsOverview onOpenPlatform={(selected) => { setPlatform(selected); setView('platform'); }} />}
       {view === 'platform' && platform && <PlatformDashboard platform={platform} />}
-      {view === 'tracker' && <TrackerUsage />}
       {view === 'builder' && builder}
     </div>
   );

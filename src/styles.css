@@ -414,8 +414,8 @@ button {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 24px;
-  padding: 30px;
+  margin-bottom: 18px;
+  padding: 24px 24px;
   border: 1px solid #d8e1ee;
   border-radius: 8px;
   background: linear-gradient(135deg, #10233f 0%, #163d68 100%);
@@ -424,7 +424,7 @@ button {
 }
 
 .eyebrow {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   color: #9fd3ff;
   font-size: 0.78rem;
   font-weight: 700;
@@ -434,16 +434,16 @@ button {
 
 .hero h1 {
   max-width: 720px;
-  margin-bottom: 8px;
-  font-size: clamp(2rem, 4vw, 3.35rem);
-  line-height: 1.05;
+  margin-bottom: 4px;
+  font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+  line-height: 1.15;
   letter-spacing: 0;
 }
 
 .hero p:not(.eyebrow) {
   max-width: 720px;
   color: #c8d7e8;
-  font-size: 1rem;
+  font-size: 0.9rem;
 }
 
 .reset-button {
@@ -1233,6 +1233,7 @@ tbody tr:last-child td {
 .status-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-height: 28px;
   border-radius: 999px;
   padding: 0 10px;
@@ -3705,7 +3706,7 @@ tbody tr:last-child td {
   }
 
   .hero {
-    padding: 22px;
+    padding: 20px 16px;
   }
 
   .reset-button {
@@ -6396,9 +6397,11 @@ label.platform-contract-check {
   font-size: 14px;
 }
 
-.license-seats-table th:nth-child(1) { width: 20%; }
-.license-seats-table th:nth-child(2) { width: 15%; }
-.license-seats-table th:nth-child(4) { width: 12%; }
+.license-seats-table th:nth-child(1) { width: 22%; }
+.license-seats-table th:nth-child(2) { width: 16%; }
+.license-seats-table th:nth-child(3) { width: 36%; }
+.license-seats-table th:nth-child(4) { width: 14%; }
+.license-seats-table th:nth-child(5) { width: 12%; }
 
 .license-seats-table td {
   white-space: normal;
@@ -6567,4 +6570,911 @@ label.platform-contract-check {
   font-size: 1.15rem;
   color: #0b1b33;
   outline: none;
+}
+
+/* Platform contract badges (On track, Notice due): hug the label and centre it. */
+.license-product-table .license-renewal > .status-badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Request Approvals: Requests / Approvals switch and horizontal roadmaps. */
+.request-view-switch {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid #dce5f0;
+  border-radius: 10px;
+  background: #f4f7fb;
+}
+
+.request-view-switch button {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: #445a74;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.request-view-switch button.active {
+  background: #ffffff;
+  color: #0b1b33;
+  box-shadow: 0 1px 3px rgba(16, 35, 63, 0.12);
+}
+
+.request-list {
+  display: grid;
+  gap: 14px;
+  padding: 0 20px 20px;
+}
+
+.request-card {
+  padding: 16px 18px;
+  border: 1px solid #e3eaf3;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.request-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.request-card-head strong {
+  display: block;
+  color: #0b1b33;
+}
+
+.request-card-head small {
+  color: #61748c;
+}
+
+.request-card-action select {
+  min-width: 160px;
+  height: 36px;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  padding: 0 10px;
+  font: inherit;
+}
+
+.request-roadmap {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  /* Inner padding keeps the pulsing ring of the current step from being clipped. */
+  margin: 0 -6px;
+  padding: 12px 6px 8px;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.request-roadmap-step {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.request-roadmap-track {
+  display: flex;
+  align-items: center;
+  height: 40px;
+}
+
+.request-roadmap-dot {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid #c8d5e4;
+  background: #ffffff;
+  color: #61748c;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.request-roadmap-line {
+  flex: 1;
+  height: 2px;
+  margin-left: 4px;
+  background: #d8e1ee;
+}
+
+.request-roadmap-done .request-roadmap-dot {
+  border-color: #15803d;
+  background: #15803d;
+  color: #ffffff;
+}
+
+.request-roadmap-done .request-roadmap-line {
+  background: #15803d;
+}
+
+.request-roadmap-current .request-roadmap-dot {
+  border-color: #2563eb;
+  color: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.request-roadmap-failed .request-roadmap-dot {
+  border-color: #b42318;
+  background: #b42318;
+  color: #ffffff;
+}
+
+.request-roadmap-placeholder .request-roadmap-dot {
+  border-style: dashed;
+}
+
+.request-roadmap-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px 0 0;
+}
+
+.request-roadmap-text strong {
+  color: #0b1b33;
+  font-size: 14px;
+}
+
+.request-roadmap-text small {
+  color: #61748c;
+  font-size: 12.5px;
+}
+
+.request-roadmap-text .status-badge {
+  align-self: flex-start;
+}
+
+@media (max-width: 900px) {
+  .request-roadmap {
+    grid-template-columns: repeat(4, minmax(170px, 1fr));
+  }
+}
+
+.request-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.request-card-head strong .sample-row-tag {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* The step a request is waiting on pulses so it stands out in the roadmap. */
+@keyframes request-roadmap-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 9px rgba(37, 99, 235, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
+}
+
+.request-roadmap-current .request-roadmap-dot {
+  animation: request-roadmap-pulse 1.8s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .request-roadmap-current .request-roadmap-dot {
+    animation: none;
+  }
+}
+
+/* Light-green slanted dashes move along the line from the last finished step
+   to the current one. */
+.request-roadmap .request-roadmap-line.request-roadmap-line-flow {
+  height: 3px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(-45deg, #86efac 0 5px, #15803d 5px 10px);
+  animation: request-roadmap-dashes 0.9s linear infinite;
+}
+
+@keyframes request-roadmap-dashes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 14px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .request-roadmap .request-roadmap-line.request-roadmap-line-flow {
+    animation: none;
+  }
+}
+
+.request-kind-tag {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+/* Offboarding (leaving the company) runs in orange, apart from onboarding's green. */
+.request-card-offboarding .request-kind-tag {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.request-card-offboarding .request-roadmap-done .request-roadmap-dot {
+  border-color: #c2410c;
+  background: #c2410c;
+}
+
+.request-card-offboarding .request-roadmap-done .request-roadmap-line {
+  background: #c2410c;
+}
+
+.request-card-offboarding .request-roadmap-current .request-roadmap-dot {
+  border-color: #ea580c;
+  color: #ea580c;
+  box-shadow: 0 0 0 4px rgba(234, 88, 12, 0.14);
+}
+
+.request-card-offboarding .request-roadmap .request-roadmap-line.request-roadmap-line-flow {
+  background: repeating-linear-gradient(-45deg, #fdba74 0 5px, #c2410c 5px 10px);
+}
+
+@keyframes request-roadmap-pulse-orange {
+  0% {
+    box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 9px rgba(234, 88, 12, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(234, 88, 12, 0);
+  }
+}
+
+.request-card-offboarding .request-roadmap-current .request-roadmap-dot {
+  animation: request-roadmap-pulse-orange 1.8s ease-out infinite;
+}
+
+/* Sub-roadmaps: a stem drops from a branching step's circle, and each
+   sub-roadmap hangs off it with a short horizontal branch. Its steps use the
+   main roadmap's styles. */
+.request-roadmap-stem {
+  justify-self: start;
+  align-self: stretch;
+  width: 2px;
+  margin: 38px 0 0 18px;
+  border-radius: 2px;
+  background: #15803d;
+  list-style: none;
+}
+
+.request-roadmap-partial .request-roadmap-dot {
+  border-color: #15803d;
+  background: linear-gradient(90deg, #15803d 50%, #ffffff 50%);
+  color: #0b1b33;
+}
+
+.request-roadmap-step-branched .request-roadmap-text {
+  padding-left: 30px;
+}
+
+.request-subflow {
+  position: relative;
+  padding: 0 0 16px 36px;
+  list-style: none;
+}
+
+.request-subflow-branch {
+  position: absolute;
+  left: 20px;
+  top: 41px;
+  width: 16px;
+  height: 2px;
+  background: #15803d;
+}
+
+.request-subflow-title {
+  height: 22px;
+  margin: 0 0 0;
+  line-height: 22px;
+  color: #0b1b33;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.request-subflow-title small {
+  margin-left: 8px;
+  color: #61748c;
+  font-weight: 400;
+}
+
+.request-subflow-steps {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Offboarding runs in orange, sub-roadmaps included. */
+.request-card-offboarding .request-roadmap-stem,
+.request-card-offboarding .request-subflow-branch {
+  background: #c2410c;
+}
+
+/* Sub-roadmaps are a smaller version of the main roadmap. */
+.request-subflow {
+  padding-bottom: 10px;
+}
+
+.request-subflow-branch {
+  top: 34px;
+}
+
+.request-subflow-title {
+  height: 20px;
+  line-height: 20px;
+  font-size: 12px;
+}
+
+.request-subflow .request-roadmap-track {
+  height: 30px;
+}
+
+.request-subflow .request-roadmap-dot {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+}
+
+.request-subflow .request-roadmap-text {
+  gap: 2px;
+  padding: 6px 8px 0 0;
+}
+
+.request-subflow .request-roadmap-text strong {
+  font-size: 12.5px;
+}
+
+.request-subflow .request-roadmap-text small {
+  font-size: 11px;
+}
+
+.request-subflow .status-badge {
+  padding: 1px 7px;
+  font-size: 10.5px;
+}
+
+/* Sub-roadmap circles are a little bigger, so labels such as 3.1 fit. */
+.request-subflow .request-roadmap-track {
+  height: 36px;
+}
+
+.request-subflow .request-roadmap-dot {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.request-subflow-branch {
+  top: 37px;
+}
+
+/* The sub-roadmap has no title row, so its branch lines up with the circle centre. */
+.request-subflow-branch {
+  top: 17px;
+}
+
+.request-subflow {
+  padding-bottom: 8px;
+}
+
+.request-subflow {
+  position: relative;
+  list-style: none;
+}
+
+/* An upward branch's line runs from its sub-roadmap down to the top of the main row. */
+.request-roadmap-stem.request-roadmap-stem-up {
+  margin: 0 0 0 18px;
+}
+
+/* A shifted step's incoming line bridges the gap from its column edge to its circle. */
+.request-roadmap-step-shifted {
+  position: relative;
+}
+
+.request-roadmap-step-shifted::before {
+  content: '';
+  position: absolute;
+  top: 19px;
+  left: 0;
+  width: var(--offset);
+  height: 2px;
+  background: #d8e1ee;
+}
+
+/* Left-facing branch: one horizontal line that reads right to left, toward the stem. */
+.request-subflow-left {
+  position: relative;
+  padding: 0 0 12px 0;
+  list-style: none;
+}
+
+.request-subflow-branch-left {
+  left: auto;
+  right: -18px;
+  top: 17px;
+  width: 18px;
+}
+
+.request-subflow-steps-left {
+  direction: rtl;
+}
+
+.request-subflow-steps-left .request-roadmap-text {
+  direction: ltr;
+  align-items: flex-end;
+  padding: 6px 0 0 0;
+  text-align: right;
+}
+
+.request-subflow-steps-left .request-roadmap-text strong {
+  font-size: 11.5px;
+}
+
+.request-subflow-steps-left .request-roadmap-text small {
+  font-size: 10.5px;
+}
+
+.request-subflow-steps-left .request-roadmap-text .status-badge {
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
+/* Left-facing steps: each text block fills its column, and its badge sits at the right edge. */
+.request-subflow-steps-left .request-roadmap-step {
+  align-items: stretch;
+}
+
+.request-subflow-steps-left .request-roadmap-text {
+  width: 100%;
+  box-sizing: border-box;
+  align-items: flex-end;
+}
+
+.request-subflow-steps-left .request-roadmap-text .status-badge {
+  align-self: flex-end;
+}
+
+/* On a left-facing branch the dashes run right to left, from 3.1 to 3.2. */
+.request-subflow-steps-left .request-roadmap-line.request-roadmap-line-flow {
+  animation-name: request-roadmap-dashes-left;
+}
+
+@keyframes request-roadmap-dashes-left {
+  from {
+    background-position: 14px 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+/* The moving dashes leaving a partly done step are light green, with no line between them. */
+.request-roadmap-partial .request-roadmap-line.request-roadmap-line-flow {
+  background: repeating-linear-gradient(-45deg, #86efac 0 5px, transparent 5px 10px);
+}
+
+/* Profile icons for people in the roadmaps. */
+.request-roadmap-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.person-avatar {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.person-avatar-photo {
+  object-fit: cover;
+  background: #e5e7eb;
+}
+
+.person-avatar-photo {
+  width: 28px;
+  height: 28px;
+}
+
+.person-avatar-photo {
+  border-radius: 6px;
+}
+
+.person-avatar-photo {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+
+/* On a left-facing branch the profile icon sits to the left of the name. */
+.request-subflow-steps-left .request-roadmap-owner {
+  direction: ltr;
+  flex-direction: row;
+  justify-content: flex-end;
+}
+
+/* Approvals: View opens a request's details and the approver's decision. */
+.request-view-button {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  border: 1px solid #15803d;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #15803d;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.request-view-button:hover {
+  background: #f0fdf4;
+}
+
+.approval-modal {
+  display: grid;
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: min(100%, 1040px);
+  min-height: min(680px, calc(100vh - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  border: 1px solid rgba(216, 225, 238, 0.9);
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: 0 28px 80px rgba(15, 30, 52, 0.28);
+}
+
+.approval-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #64748b;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.approval-modal-close:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.approval-modal-details,
+.approval-modal-decide {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 24px;
+}
+
+.approval-modal-details {
+  border-right: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.approval-modal-details h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.approval-modal-details dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.approval-modal-details dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.approval-modal-details dt {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.approval-modal-details dd {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #0f172a;
+}
+
+.approval-modal-approver {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.approval-modal-approver .person-avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 14px;
+}
+
+.approval-modal-approver span {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.approval-modal-approver strong,
+.approval-modal-approver small {
+  display: block;
+}
+
+.approval-modal-approver small {
+  color: #64748b;
+}
+
+.approval-modal-note {
+  display: grid;
+  gap: 6px;
+}
+
+.approval-modal-note span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.approval-modal-note textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 13.5px;
+  resize: vertical;
+}
+
+.approval-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.approval-modal-actions button {
+  padding: 9px 20px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.approval-modal-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.approval-decline {
+  border: 1px solid #be123c;
+  background: #ffffff;
+  color: #be123c;
+}
+
+.approval-approve {
+  border: 1px solid #15803d;
+  background: #15803d;
+  color: #ffffff;
+}
+
+@media (max-width: 720px) {
+  .approval-modal {
+    grid-template-columns: 1fr;
+  }
+
+  .approval-modal-details {
+    border-right: 0;
+    border-bottom: 1px solid #e2e8f0;
+  }
+}
+
+/* The View button sits under the manager approval step's name and detail. */
+.request-roadmap-action {
+  margin-top: 8px;
+}
+
+/* Verification result in the approval modal: a green tick or a red cross in a circle. */
+.approval-verify-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-verify-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.approval-verify-pass {
+  background: #15803d;
+}
+
+.approval-verify-fail {
+  background: #be123c;
+}
+
+/* Space under the verifications title, and a title and description under each result. */
+.approval-verify-block dd {
+  margin-top: 10px;
+}
+
+/* AI assistant: the project-access workflow shown inside a reply, full width. */
+.assistant-message:has(.assistant-embed) {
+  max-width: 100%;
+  width: 100%;
+}
+
+.assistant-embed {
+  margin-top: 10px;
+}
+
+.assistant-workflow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #d8e1ee;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.assistant-workflow header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-workflow header small {
+  color: #64748b;
+}
+
+.assistant-workflow-scroll {
+  overflow-x: auto;
+}
+
+/* AI assistant sample replies: larger topics, sub-topics and bullets. */
+.assistant-rich {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assistant-rich-topic {
+  margin: 4px 0 2px;
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.assistant-rich-subtopic {
+  margin: 12px 0 2px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.assistant-rich-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.assistant-rich-bullet {
+  display: block;
+  padding-left: 16px;
+  position: relative;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.assistant-rich-bullet::before {
+  content: '•';
+  position: absolute;
+  left: 2px;
+  color: #15803d;
+}
+
+.assistant-rich-gap {
+  display: block;
+  height: 4px;
+}
+
+/* Licence seats on a sample PC's details page, one row after another. */
+.device-seat-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(90px, auto) minmax(0, 2.6fr) minmax(70px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.device-seat-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.device-seat-name small {
+  color: #64748b;
+}
+
+.device-seat-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (max-width: 720px) {
+  .device-seat-row {
+    grid-template-columns: 1fr;
+  }
 }

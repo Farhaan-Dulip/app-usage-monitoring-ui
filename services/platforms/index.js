@@ -270,6 +270,49 @@ const BUILDERS = {
 
     return {
       summary: { mtdCost: mtd, forecastCost: mtd + forecastRest, savingsMonthly: advisorSavings + orphanedCost, insights: recommendations.length + orphaned.length + lowReservations.length },
+      resources: [
+        ...recommendations.map((item) => ({
+          id: `advisor:${item.id}`,
+          name: item.name,
+          detail: `${item.resourceType} · ${item.group}`,
+          status: 'Reclaimable',
+          evidence: [
+            { text: `Azure Advisor: ${item.problem}`, tone: 'bad' },
+            { text: `${item.impact[0].toUpperCase()}${item.impact.slice(1)} impact`, tone: 'muted' },
+          ],
+          savings: item.savings,
+        })),
+        ...orphaned.map((item) => ({
+          id: `orphaned:${item.id}`,
+          name: item.name,
+          detail: `${item.kind} · ${item.group}`,
+          status: 'Reclaimable',
+          evidence: [
+            { text: `Resource Graph: ${item.kind}${item.size !== '—' ? `, ${item.size}` : ''}`, tone: 'bad' },
+            { text: `${item.ageDays} days old, attached to nothing`, tone: 'muted' },
+          ],
+          savings: item.estimated,
+        })),
+        ...reservations.map((item) => ({
+          id: `reservation:${item.id}`,
+          name: item.name,
+          detail: `Reservation · ${item.sku} × ${item.quantity}`,
+          status: item.utilization !== null && item.utilization < 0.8 ? 'Reclaimable' : 'Active',
+          evidence: [
+            { text: `Reservation: ${item.utilization === null ? 'utilization unknown' : `${Math.round(item.utilization * 100)}% used in 30 days`}`, tone: item.utilization !== null && item.utilization < 0.8 ? 'bad' : 'good' },
+            { text: `Expires ${item.expiry}${item.renew ? ' · auto-renews' : ''}`, tone: 'muted' },
+          ],
+          savings: 0,
+        })),
+        ...groups.map((row) => ({
+          id: `group:${row.ResourceGroupName}`,
+          name: row.ResourceGroupName,
+          detail: 'Resource group',
+          status: 'Active',
+          evidence: [{ text: `Cost Management: ${Math.round(row.Cost).toLocaleString('en-US')} USD month to date`, tone: 'good' }],
+          savings: 0,
+        })),
+      ],
       licensing: { unit: 'Spend commitment (MACC)', entitlement: `${Math.round(contract.commitmentAmount / 1000)}k ${contract.currency} over the term`, pace },
       opportunities: [
         ...recommendations.map((item) => ({ id: `azure:${item.id}`, action: advisorAction(item), detail: `Azure Advisor · ${item.problem}`, impact: item.savings })),
@@ -361,6 +404,18 @@ const BUILDERS = {
 
     return {
       summary: { mtdCost: mtd, forecastCost: mtd / monthFraction(now), savingsMonthly: idleCost, insights: warehouses.filter((row) => row.advice !== 'OK').length },
+      consumed,
+      resources: warehouses.map((row) => ({
+        id: `warehouse:${row.name}`,
+        name: row.name,
+        detail: `Warehouse · ${row.size} · ${row.state}`,
+        status: row.advice === 'OK' ? 'Active' : 'Reclaimable',
+        evidence: [
+          { text: `Snowflake: ${Math.round(row.credits).toLocaleString('en-US')} credits, ${row.queries.toLocaleString('en-US')} queries in 30 days`, tone: row.advice === 'OK' ? 'good' : 'plain' },
+          { text: row.advice === 'OK' ? `${Math.round(row.idleShare * 100)}% idle · auto-suspend ${Math.round(row.autoSuspend / 60)} min` : `${Math.round(row.idleShare * 100)}% idle · ${row.advice}`, tone: row.advice === 'OK' ? 'muted' : 'bad' },
+        ],
+        savings: row.advice === 'OK' ? 0 : row.idleCost,
+      })),
       licensing: { unit: 'Capacity (prepaid credits)', entitlement: `${Math.round(terms.commitmentAmount / 1000)}k ${terms.currency} capacity`, pace },
       opportunities: warehouses.filter((row) => row.advice !== 'OK').map((row) => ({
         id: `snowflake:${row.name}`,
@@ -444,6 +499,21 @@ const BUILDERS = {
       opportunities: [
         ...(idle.length ? [{ id: 'datadog:idle-hosts', action: `Remove or consolidate ${idle.length} idle Datadog hosts`, detail: 'Datadog · billed hosts under 5% CPU', impact: round(idleSaving) }] : []),
       ],
+      resources: hosts.map((host) => {
+        const isIdle = host.cpu < 0.05 && host.hoursSince < 24;
+        const isStale = host.hoursSince >= 24;
+        return {
+          id: `host:${host.id}`,
+          name: host.name,
+          detail: `Host · ${host.sources}`,
+          status: isIdle || isStale ? 'Reclaimable' : 'Active',
+          evidence: [
+            { text: isStale ? `Datadog: not reporting for ${Math.round(host.hoursSince)} hours` : `Datadog: CPU ${Math.round(host.cpu * 100)}%`, tone: isIdle || isStale ? 'bad' : 'good' },
+            { text: `Last report ${host.hoursSince < 1 ? 'under an hour' : `${Math.round(host.hoursSince)}h`} ago`, tone: 'muted' },
+          ],
+          savings: isIdle || isStale ? round(15 * (1 - (contract.discountPercent || 0) / 100)) : 0,
+        };
+      }),
       licensing: { unit: 'Committed hosts', entitlement: units.infraHosts ? `${units.infraHosts} infra + ${units.apmHosts} APM hosts (peak ${maxHosts})` : `${maxHosts} hosts`, pace },
       summary: { mtdCost: mtd.total_cost, forecastCost: projected.projected_total_cost, savingsMonthly: idleSaving, insights: idle.length + stale.length + (maxHosts > (units.infraHosts || Infinity) ? 1 : 0) },
       renewals,
@@ -532,7 +602,8 @@ export function platformOverview({ saved = {}, now = new Date() } = {}) {
       mode: dashboard.mode,
       ...dashboard.summary,
       licensing: dashboard.licensing,
-      contract: { agreement: dashboard.contract.agreement, commitmentAmount: dashboard.contract.commitmentAmount, currency: dashboard.contract.currency, endDate: dashboard.contract.endDate, source: dashboard.contract.source },
+      resources: dashboard.resources || [],
+      contract: { agreement: dashboard.contract.agreement, commitmentAmount: dashboard.contract.commitmentAmount, consumedAmount: dashboard.licensing.pace?.consumed ?? dashboard.contract.consumedAmount, currency: dashboard.contract.currency, startDate: dashboard.contract.startDate, endDate: dashboard.contract.endDate, source: dashboard.contract.source },
       nextRenewal: dashboard.renewals.filter((item) => item.daysToEnd >= 0).sort((a, b) => a.daysToNotice - b.daysToNotice)[0] || null,
     })),
     totals: {

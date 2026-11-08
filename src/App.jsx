@@ -35,8 +35,13 @@ import {
   vendorRuleFields,
 } from './utils/appRules';
 import InventoryAppPicker from './components/InventoryAppPicker';
-import { sampleLicenseGroups } from './data/sampleLicenseGroups';
+import { sampleDeviceRows, sampleLicenseGroups } from './data/sampleLicenseGroups';
 import LicenseOverview from './components/LicenseOverview';
+import DeviceSeatList from './components/DeviceSeatList';
+import RequestRoadmap from './components/RequestRoadmap';
+import { OBJECTIVE_STATUS, buildRoadmap } from './utils/requestRoadmap';
+import { sampleRequests, sampleWorkflows } from './data/sampleRequests';
+import PersonAvatar from './components/PersonAvatar';
 import { buildProductRows, sampleProductRows } from './utils/licenseOverview';
 import { appEngagementSeries } from './utils/appEngagement';
 import {
@@ -3027,7 +3032,12 @@ export default function App({ user = null, onSignOut = null }) {
   // Policies live on each inventory app now; nothing is saved here any more.
   const licensePolicies = useMemo(() => [], []);
   const [licenseRequests, setLicenseRequests] = useState([]);
+  // Request Approvals: every request, or only those waiting for an approver.
+  const [requestView, setRequestView] = useState('requests');
   const [licenseApprovalStatus, setLicenseApprovalStatus] = useState('');
+  // The request open in the View modal, and the approver's note for it.
+  const [approvalModal, setApprovalModal] = useState(null);
+  const [approverNote, setApproverNote] = useState('');
   const [deviceOwners, setDeviceOwners] = useState([]);
   const [deviceOwnerDrafts, setDeviceOwnerDrafts] = useState({});
   const [deviceOwnerStatus, setDeviceOwnerStatus] = useState('');
@@ -3058,6 +3068,9 @@ export default function App({ user = null, onSignOut = null }) {
   );
   const latestTelemetry = telemetryHistory.at(-1) || null;
   const [showAgentDetails, setShowAgentDetails] = useState(false);
+  // A PC opened from License Utilizations returns there, to the product it came from.
+  const [returnToLicenseRowId, setReturnToLicenseRowId] = useState(null);
+  const [licenseRestoreRowId, setLicenseRestoreRowId] = useState(null);
   const [isNavCollapsedAfterSelect, setIsNavCollapsedAfterSelect] = useState(false);
   const [selectedReportTemplateId, setSelectedReportTemplateId] = useState('ceo-monthly');
   const [selectedReportDimensions, setSelectedReportDimensions] = useState([
@@ -3343,6 +3356,8 @@ export default function App({ user = null, onSignOut = null }) {
   // The product open in License Utilizations: Core App Engagement then shows
   // its use on each PC.
   const [engagementProduct, setEngagementProduct] = useState(null);
+  // The platform open in Enterprise Platform Licenses (hides the category switch).
+  const [openPlatform, setOpenPlatform] = useState(null);
   const engagementChart = useMemo(
     () => (engagementProduct ? appEngagementSeries(engagementProduct, allTelemetryHistory) : null),
     [allTelemetryHistory, engagementProduct]
@@ -3781,8 +3796,8 @@ export default function App({ user = null, onSignOut = null }) {
               ...onboardedAppLicenses.map((app) => app.appName),
             ]
           : device.trackedApps,
-    }));
-  }, [deviceOwners, liveDeviceKey, onboardedAppLicenses, usageByApp]);
+    })).concat(showSampleLicenses ? sampleDeviceRows(sampleLicenseGroups()) : []);
+  }, [deviceOwners, liveDeviceKey, onboardedAppLicenses, showSampleLicenses, usageByApp]);
 
   const selectedDevice = useMemo(
     () =>
@@ -3873,6 +3888,22 @@ export default function App({ user = null, onSignOut = null }) {
   const selectedDeviceEngagementData = useMemo(() => {
     if (!selectedDevice || selectedDeviceEngagementSeries.length === 0) {
       return [];
+    }
+
+    // Sample PCs: a working-day curve per app, one line for each app.
+    if (selectedDevice.sample) {
+      return Array.from({ length: 24 }, (_, hour) => {
+        const point = { time: `${String(hour).padStart(2, '0')}:00` };
+        selectedDeviceEngagementSeries.forEach((series, seriesIndex) => {
+          const start = 8 + (seriesIndex % 3);
+          const end = 16 + (seriesIndex % 4);
+          const spread = (end - start) / 2 + 1;
+          const shape = Math.max(0, 1 - ((hour - (start + end) / 2) / spread) ** 2);
+          const peak = 34 + seriesIndex * 9;
+          point[series.dataKey] = Math.round(hour < start - 1 || hour > end + 1 ? 0 : peak * shape * (hour === 12 ? 0.55 : 1));
+        });
+        return point;
+      });
     }
 
     if (selectedDevice.id !== liveDeviceKey) return [];
@@ -4889,6 +4920,17 @@ export default function App({ user = null, onSignOut = null }) {
     setShowAgentDetails(true);
   };
 
+  // Explore from a licence seat: remember the product open on License Utilizations.
+  const handleExploreLicenseSeat = (pcName, productRowId) => {
+    setReturnToLicenseRowId(productRowId || null);
+    handleExploreDashboardAgent(pcName);
+  };
+
+  // Once the page has reopened the product, forget the restore request.
+  useEffect(() => {
+    if (activeView === 'dashboard' && licenseRestoreRowId) setLicenseRestoreRowId(null);
+  }, [activeView, licenseRestoreRowId]);
+
   const resetForAgentStartChange = (payload) => {
     const nextAgentStartedAt = getAgentStartedTimestampMs(payload);
     if (!nextAgentStartedAt) return false;
@@ -4993,9 +5035,9 @@ export default function App({ user = null, onSignOut = null }) {
     }
   };
 
-  const decideLicenseRequest = async (request, action) => {
+  const decideLicenseRequest = async (request, action, note = null) => {
     const declineReason = action === 'decline'
-      ? window.prompt(`Provide a reason for declining ${request.requestedApp}.`)
+      ? (note ?? window.prompt(`Provide a reason for declining ${request.requestedApp}.`))
       : '';
     if (action === 'decline' && !declineReason?.trim()) return;
 
@@ -5003,7 +5045,7 @@ export default function App({ user = null, onSignOut = null }) {
       const response = await fetch(`${BACKEND_BASE_URL}/api/license-requests/${request.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, declineReason }),
+        body: JSON.stringify({ action, declineReason, approverNote: note || '' }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to update request');
@@ -5095,7 +5137,7 @@ export default function App({ user = null, onSignOut = null }) {
         {activeView === 'ai-tools' && <AiToolsView />}
 
         {activeView === 'ai-assistant' && (
-          <ChatAssistant backendBaseUrl={BACKEND_BASE_URL} clientId={portalClientId} userEmail={user?.email || ''} />
+          <ChatAssistant backendBaseUrl={BACKEND_BASE_URL} clientId={portalClientId} userEmail={user?.email || ''} sampleData={showSampleLicenses} />
         )}
 
         {activeView === 'unified-dashboard' && (
@@ -5330,78 +5372,181 @@ export default function App({ user = null, onSignOut = null }) {
           </>
         )}
 
-        {activeView === 'license-approvals' && (
+        {activeView === 'license-approvals' && (() => {
+          const allRequests = showSampleLicenses ? [...sampleWorkflows(), ...licenseRequests, ...sampleRequests()] : licenseRequests;
+          const shown = requestView === 'approvals'
+            ? allRequests.filter((request) => request.status === 'pending_approval')
+            : allRequests;
+          return (
           <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <h2>Requester approval routing</h2>
-                  <p>Each request is routed to the app owner configured during license onboarding.</p>
-                </div>
-                <span className="last-updated">{licenseRequests.length} requests</span>
+            <div className="panel-header">
+              <div>
+                <h2>{requestView === 'approvals' ? 'Approvals' : 'Requests'}</h2>
+                <p>
+                  {requestView === 'approvals'
+                    ? 'Requests waiting for an approver. Each one routes to the app owner configured during license onboarding.'
+                    : 'Every request raised in the assistant or from email, with the objectives it moves through.'}
+                </p>
               </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Requester</th>
-                      <th>Approving manager</th>
-                      <th>Item</th>
-                      <th>Target device</th>
-                      <th>Reason</th>
-                      <th>Status</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {licenseRequests.length === 0 ? (
-                      <tr><td colSpan="7">No license requests yet.</td></tr>
-                    ) : licenseRequests.map((request) => (
-                      <tr key={request.id}>
-                        <td><strong>{request.requesterName}</strong><small>{request.requesterEmail}</small></td>
-                        <td><strong>{request.approvingManagerName}</strong><small>{request.approvingManagerEmail}</small></td>
-                        <td>
+              <div className="request-header-actions">
+                <label className="sample-data-switch" title="Adds sample requests that cover each roadmap state">
+                  <input checked={showSampleLicenses} type="checkbox" onChange={(event) => toggleSampleLicenses(event.target.checked)} />
+                  Sample data
+                </label>
+              <div className="request-view-switch" role="tablist" aria-label="Requests or approvals">
+                {[['requests', 'Requests'], ['approvals', 'Approvals']].map(([id, label]) => (
+                  <button
+                    aria-selected={requestView === id}
+                    className={requestView === id ? 'active' : ''}
+                    key={id}
+                    role="tab"
+                    type="button"
+                    onClick={() => setRequestView(id)}
+                  >
+                    {label}
+                    {id === 'approvals' && ` (${allRequests.filter((request) => request.status === 'pending_approval').length})`}
+                  </button>
+                ))}
+              </div>
+              </div>
+            </div>
+            <div className="request-list">
+              {shown.length === 0 && (
+                <p className="muted-value">
+                  {requestView === 'approvals' ? 'Nothing is waiting for an approver.' : 'No requests yet.'}
+                </p>
+              )}
+              {shown.map((request) => {
+                const roadmap = request.roadmap || buildRoadmap(request);
+                const decidable = request.status === 'pending_approval';
+                // Sample requests have no record to decide, so they stay read-only.
+                return (
+                  <article className={`request-card${request.kind === 'Offboarding' ? ' request-card-offboarding' : ''}`} key={request.id}>
+                    <div className="request-card-head">
+                      <div>
+                        <strong>
                           {request.requestedApp}
-                          {request.source === 'email' && <small>Raised by AI agent from email</small>}
-                        </td>
-                        <td>
-                          {request.targetDevice?.pcName
-                            ? <strong>{request.targetDevice.pcName}</strong>
-                            : request.status === 'awaiting_device'
-                              ? <small>Asked requester: {request.candidateDevices.map((device) => device.pcName).join(', ')}</small>
-                              : <span className="muted-value">Not on record</span>}
-                        </td>
-                        <td>
-                          {request.reason}
-                          {request.status === 'declined' && <small>Declined: {request.declineReason}</small>}
-                        </td>
-                        <td>
-                          <span className={`status-badge ${(LICENSE_REQUEST_STATUS[request.status] || LICENSE_REQUEST_STATUS.unknown).className}`}>
-                            {(LICENSE_REQUEST_STATUS[request.status] || LICENSE_REQUEST_STATUS.unknown).label}
-                          </span>
-                        </td>
-                        <td>
-                          {request.status === 'pending_approval' ? (
-                            <label className="filter-control license-decision-control">
-                              <select
-                                aria-label={`Decision for ${request.requesterName}'s ${request.requestedApp} request`}
-                                value=""
-                                onChange={(event) => decideLicenseRequest(request, event.target.value)}
-                              >
-                                <option value="" disabled>Choose action</option>
-                                <option value="approve">Accept</option>
-                                <option value="decline">Decline</option>
-                              </select>
-                            </label>
-                          ) : <span className="muted-value">Decided</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {licenseApprovalStatus && <p className="email-summary-status">{licenseApprovalStatus}</p>}
-            </section>
-        )}
+                          {request.kind && <small className="request-kind-tag">{request.kind}</small>}
+                          {request.sample && <small className="sample-row-tag">Sample</small>}
+                        </strong>
+                        <small>
+                          {request.requesterName} · {request.requesterEmail}
+                          {request.targetDevice?.pcName ? ` · ${request.targetDevice.pcName}` : ''}
+                        </small>
+                        {request.reason && <small>“{request.reason}”</small>}
+                      </div>
+                      {!decidable && (request.badge ? (
+                        <span className="status-badge status-observing">{request.badge}</span>
+                      ) : (
+                        <span className={`status-badge ${(LICENSE_REQUEST_STATUS[request.status] || LICENSE_REQUEST_STATUS.unknown).className}`}>
+                          {(LICENSE_REQUEST_STATUS[request.status] || LICENSE_REQUEST_STATUS.unknown).label}
+                        </span>
+                      ))}
+                    </div>
+                    <RequestRoadmap
+                      action={decidable && requestView === 'approvals' ? (
+                        <button
+                          aria-label={`View ${request.requesterName}'s ${request.requestedApp} request`}
+                          className="request-view-button"
+                          type="button"
+                          onClick={() => { setApprovalModal(request); setApproverNote(''); }}
+                        >
+                          View
+                        </button>
+                      ) : null}
+                      roadmap={roadmap}
+                    />
+                  </article>
+                );
+              })}
+            </div>
+            {licenseApprovalStatus && <p className="email-summary-status">{licenseApprovalStatus}</p>}
+            {approvalModal && (() => {
+              const request = approvalModal;
+              const sourceLabel = request.source === 'email'
+                ? 'Email via AI agent'
+                : request.source === 'servicenow' ? 'ServiceNow' : 'AI assistant';
+              const canDecide = !request.sample;
+              const close = () => { setApprovalModal(null); setApproverNote(''); };
+              const decide = async (action) => {
+                await decideLicenseRequest(request, action, approverNote.trim());
+                close();
+              };
+              return (
+                <div className="settings-modal-backdrop" role="presentation" onClick={close}>
+                  <div
+                    aria-label={`${request.requestedApp} request`}
+                    aria-modal="true"
+                    className="approval-modal"
+                    role="dialog"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button aria-label="Close" className="approval-modal-close" type="button" onClick={close}>×</button>
+                    <div className="approval-modal-details">
+                      <p className="eyebrow">Request details</p>
+                      <h3>{request.requestedApp}</h3>
+                      <dl>
+                        <div><dt>Source</dt><dd>{sourceLabel}</dd></div>
+                        <div><dt>Requester</dt><dd>{request.requesterName}{request.requesterEmail ? ` · ${request.requesterEmail}` : ''}</dd></div>
+                        <div><dt>PC name</dt><dd>{request.targetDevice?.pcName || 'Not chosen yet'}</dd></div>
+                        <div><dt>Requested</dt><dd>{request.createdAt ? new Date(request.createdAt).toLocaleString() : '—'}</dd></div>
+                        <div><dt>Request details</dt><dd>{request.reason || '—'}</dd></div>
+                        <div className="approval-verify-block">
+                          <dt>Verifications &amp; results</dt>
+                          <dd>
+                            {(() => {
+                              const verify = (request.roadmap || buildRoadmap(request)).find((objective) => objective.id === 'verify');
+                              if (!verify) return '—';
+                              const passed = verify.status === 'done';
+                              const failed = verify.status === 'failed';
+                              return (
+                                <span className="approval-verify-result">
+                                  {(passed || failed) && (
+                                    <span
+                                      aria-label={passed ? 'Verified' : 'Verification failed'}
+                                      className={`approval-verify-icon ${passed ? 'approval-verify-pass' : 'approval-verify-fail'}`}
+                                    >
+                                      {passed ? '✓' : '✕'}
+                                    </span>
+                                  )}
+                                  <span>{verify.detail}</span>
+                                </span>
+                              );
+                            })()}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                    <div className="approval-modal-decide">
+                      <div className="approval-modal-approver">
+                        <PersonAvatar name={request.approvingManagerName} />
+                        <div>
+                          <span>Approver</span>
+                          <strong>{request.approvingManagerName}</strong>
+                          {request.approvingManagerEmail && <small>{request.approvingManagerEmail}</small>}
+                        </div>
+                      </div>
+                      <label className="approval-modal-note">
+                        <span>Approver note</span>
+                        <textarea
+                          placeholder="Add a note. A note is required to decline."
+                          rows={5}
+                          value={approverNote}
+                          onChange={(event) => setApproverNote(event.target.value)}
+                        />
+                      </label>
+                      <div className="approval-modal-actions">
+                        <button className="approval-decline" disabled={!canDecide || !approverNote.trim()} type="button" onClick={() => decide('decline')}>Decline</button>
+                        <button className="approval-approve" disabled={!canDecide} type="button" onClick={() => decide('approve')}>Approve</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </section>
+          );
+        })()}
 
 
         {activeView === 'reporting-insights' && (
@@ -5666,8 +5811,8 @@ export default function App({ user = null, onSignOut = null }) {
         {activeView === 'dashboard' && (
           <>
           {/* An open app's page has no category switch; All software brings it back. */}
-          {!engagementProduct && <LicenseCategoryTabs value={licenseCategory} onChange={setLicenseCategory} />}
-          {licenseCategory === 'platform' && <PlatformLicenses />}
+          {!engagementProduct && !openPlatform && <LicenseCategoryTabs value={licenseCategory} onChange={setLicenseCategory} />}
+          {licenseCategory === 'platform' && <PlatformLicenses onSelectRow={setOpenPlatform} />}
           {licenseCategory === 'end-user' && (
           <>
           {(
@@ -5680,6 +5825,8 @@ export default function App({ user = null, onSignOut = null }) {
               title="Licenses"
               onToggleSample={toggleSampleLicenses}
               onSelectRow={setEngagementProduct}
+              initialRowId={licenseRestoreRowId || ''}
+              onExploreSeat={handleExploreLicenseSeat}
             />
 
           <section className="panel compact-panel trends-panel">
@@ -6308,6 +6455,7 @@ export default function App({ user = null, onSignOut = null }) {
                       <th>User Email</th>
                       <th>Apps</th>
                       <th>Status</th>
+                      <th>Explore</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -6332,6 +6480,16 @@ export default function App({ user = null, onSignOut = null }) {
                                   {new Date(deployment.sentAt).toLocaleString()}
                                 </small>
                               )}
+                            </td>
+                            <td>
+                              <button
+                                className="explore-button"
+                                type="button"
+                                onClick={() => handleExploreDashboardAgent(deployment.pcName)}
+                              >
+                                <span className="action-symbol">›</span>
+                                Explore
+                              </button>
                             </td>
                           </tr>
                         );
@@ -7002,7 +7160,14 @@ export default function App({ user = null, onSignOut = null }) {
                   <button
                     className="back-button"
                     type="button"
-                    onClick={() => setShowAgentDetails(false)}
+                    onClick={() => {
+                      setShowAgentDetails(false);
+                      if (returnToLicenseRowId !== null) {
+                        setLicenseRestoreRowId(returnToLicenseRowId);
+                        setReturnToLicenseRowId(null);
+                        setActiveView('dashboard');
+                      }
+                    }}
                   >
                     Back
                   </button>
@@ -7096,7 +7261,9 @@ export default function App({ user = null, onSignOut = null }) {
                 <div>
                   <h3>Tracked Software Licenses</h3>
                   <div className="tracked-app-list">
-                    {selectedDeviceApps.map((entry) => (
+                    {selectedDevice.sample ? (
+                      <DeviceSeatList seats={sampleLicenseGroups().filter((group) => group.pcName === selectedDevice.pcName)} />
+                    ) : selectedDeviceApps.map((entry) => (
                       <div className="tracked-app-item" key={entry.appName}>
                         <span className="app-icon">{entry.icon}</span>
                         <div>

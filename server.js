@@ -386,6 +386,7 @@ function serializeLicenseRequest(request) {
     reason: request.requestText,
     status: request.status,
     declineReason: request.declineReason || '',
+    approverNote: request.approverNote || '',
     source: request.source || 'chat',
     targetDevice: request.targetDevice || null,
     candidateDevices: request.candidateDevices || [],
@@ -719,6 +720,7 @@ app.patch('/api/license-requests/:requestId', async (req, res) => {
         $set: {
           status: action === 'approve' ? 'approved' : 'declined',
           declineReason: action === 'decline' ? declineReason : null,
+          approverNote: String(req.body?.approverNote || '').trim() || null,
           decidedAt: now,
           updatedAt: now,
         },

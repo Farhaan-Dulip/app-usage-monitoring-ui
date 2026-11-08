@@ -346,3 +346,32 @@ function extraSeats(now) {
     })
   );
 }
+
+// Sample PCs for the Agent Management list and PC details page: one device per
+// sample PC, with the apps that have sample seats on it.
+export function sampleDeviceRows(groups) {
+  const appsByPc = new Map();
+  groups.forEach((group) => {
+    if (!group.pcName) return;
+    if (!appsByPc.has(group.pcName)) appsByPc.set(group.pcName, []);
+    appsByPc.get(group.pcName).push(group.name);
+  });
+  return [...appsByPc].map(([pcName, apps], index) => {
+    const email = `sample.user${index + 1}@example.com`;
+    return {
+      id: `sample-device-${pcName}`,
+      pcName,
+      user: email,
+      ownerEmail: email,
+      // Most sample PCs look live; every third one is offline.
+      isLive: index % 3 !== 2,
+      activeLicenseCount: apps.length,
+      totalLicenseCost: null,
+      agentVersion: 'Tracker',
+      policy: 'Sample policy',
+      trackedApps: [...new Set(apps)],
+      registered: false,
+      sample: true,
+    };
+  });
+}
