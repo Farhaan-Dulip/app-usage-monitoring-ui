@@ -598,6 +598,13 @@ button {
 
 .app-license-onboarding-form {
   grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) auto;
+  /* Top-aligned, so the policy chips under Policy don't push App Name down. */
+  align-items: start;
+}
+
+/* Level with the inputs: skip the height of the field labels above them. */
+.app-license-onboarding-form > button {
+  margin-top: 25px;
 }
 
 .agent-config-preview {
@@ -7662,6 +7669,283 @@ label.platform-contract-check {
 
 @media (max-width: 1100px) {
   .workflow-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* App Rules: the table of created policies under the form. */
+.app-rule-policy-table {
+  margin-top: 18px;
+}
+
+/* PC details: a card per licence with the tracker's measure and vendor API data. */
+.device-vendor-section {
+  margin-top: 18px;
+}
+
+.device-vendor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 20px;
+}
+
+.device-vendor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid #e3eaf3;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(16, 35, 63, 0.05);
+}
+
+.device-vendor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.device-vendor-head strong {
+  flex: 1;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.device-vendor-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.device-vendor-metrics dt {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+}
+
+.device-vendor-metrics dd {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.device-vendor-tracker {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f0fdf4;
+}
+
+.device-vendor-tracker dd {
+  color: #15803d;
+}
+
+.device-vendor-note {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.device-vendor-source {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid #edf1f6;
+  font-size: 12px;
+  color: #64748b;
+}
+
+@media (max-width: 760px) {
+  .device-vendor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Report Builder chat: a message's text and, for a report, the report under it. */
+.report-builder-chat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 80%;
+}
+
+.report-builder-chat-message.user .report-builder-chat-body {
+  align-items: flex-end;
+}
+
+.report-builder-chat-body p {
+  max-width: 100%;
+}
+
+.report-builder-chat-message.has-report .report-builder-chat-body {
+  flex: 1;
+  max-width: 100%;
+}
+
+/* A report needs room: let the conversation grow instead of scrolling a small box. */
+.report-builder-chat-messages:has(.has-report) {
+  max-height: none;
+}
+
+.report-builder-sample-prompts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.report-builder-sample-prompts button {
+  padding: 5px 12px;
+  border: 1px solid #d8e1ee;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.report-builder-sample-prompts button:hover {
+  border-color: #15803d;
+  background: #f0fdf4;
+}
+
+/* The sample combined report drawn in the chat. */
+.combined-report {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e3eaf3;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.combined-report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.combined-report-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.combined-report-kpis > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.combined-report-kpis span,
+.combined-report-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+}
+
+.combined-report-kpis strong {
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.combined-report-saving {
+  background: #f0fdf4 !important;
+}
+
+.combined-report-saving strong {
+  color: #15803d;
+}
+
+.combined-report-chart,
+.combined-report-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.combined-report-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.combined-report-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.combined-report-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.combined-report-table th,
+.combined-report-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #edf1f6;
+  text-align: left;
+}
+
+.combined-report-table th {
+  font-weight: 600;
+  color: #475569;
+}
+
+.combined-report-summary {
+  margin: 0;
+  background: transparent !important;
+  padding: 0 !important;
+  max-width: 100% !important;
+  font-size: 13px !important;
+  line-height: 1.55;
+  color: #334155;
+}
+
+@media (max-width: 760px) {
+  .combined-report-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Sample reports: two charts side by side, and a small note under a figure. */
+.combined-report-charts-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.combined-report-kpis small {
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+@media (max-width: 760px) {
+  .combined-report-charts-row {
     grid-template-columns: 1fr;
   }
 }

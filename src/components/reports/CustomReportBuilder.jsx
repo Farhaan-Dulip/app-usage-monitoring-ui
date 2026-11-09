@@ -1,4 +1,32 @@
 import { useState } from 'react';
+import CombinedReportPreview from './CombinedReportPreview';
+import RenewalSavingsPreview from './RenewalSavingsPreview';
+import AiAdoptionPreview from './AiAdoptionPreview';
+
+// Sample prompts under the AI box; each draws its sample report in the chat.
+const SAMPLE_PROMPTS = [
+  'Generate a combined licence report for apps and AI tools for the last 30 days',
+  'Which renewals are coming up and how much can we save by right-sizing before they renew?',
+  'How well are our teams adopting AI tools, and which AI seats are going unused?',
+];
+const REPORTS = {
+  combined: CombinedReportPreview,
+  renewals: RenewalSavingsPreview,
+  'ai-adoption': AiAdoptionPreview,
+};
+const REPLIES = {
+  combined: 'Here is your combined licence report for apps and AI tools over the last 30 days.',
+  renewals: 'Here are the renewals due in the next 90 days, and what you save by renewing only the seats people use.',
+  'ai-adoption': 'Here is AI adoption across Claude, Codex and GitHub Copilot over the last 30 days.',
+};
+
+// Which sample report a prompt asks for, or null for the general reply.
+function reportFor(text) {
+  if (/adopt/i.test(text)) return 'ai-adoption';
+  if (/renew|right-?siz/i.test(text)) return 'renewals';
+  if (/(combined|combine|all\s+(apps|licen))/i.test(text) && /report/i.test(text)) return 'combined';
+  return null;
+}
 
 const TEMPLATES = [
   { id: 'license', name: 'License health', description: 'Seats, spend, active users, and reclaim opportunities.', scope: 'Enterprise applications' },
@@ -18,6 +46,7 @@ export default function CustomReportBuilder() {
   const [generated, setGenerated] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [chat, setChat] = useState([]);
+  const [thinking, setThinking] = useState(false);
 
   const chooseTemplate = (template) => {
     setSelectedTemplate(template.id);
@@ -35,12 +64,23 @@ export default function CustomReportBuilder() {
   const sendPrompt = (event) => {
     event.preventDefault();
     const question = prompt.trim();
-    if (!question) return;
-    setChat((messages) => [...messages, { role: 'user', text: question }, {
-      role: 'assistant',
-      text: 'I can help shape this report. Choose a template or adjust the options below, then generate the report when it looks right.',
-    }]);
+    if (!question || thinking) return;
+    setChat((messages) => [...messages, { role: 'user', text: question }]);
     setPrompt('');
+    const report = reportFor(question);
+    if (!report) {
+      setChat((messages) => [...messages, {
+        role: 'assistant',
+        text: 'I can help shape this report. Choose a template or adjust the options below, then generate the report when it looks right.',
+      }]);
+      return;
+    }
+    // A short wait, so the sample report arrives like a generated one.
+    setThinking(true);
+    window.setTimeout(() => {
+      setChat((messages) => [...messages, { role: 'assistant', text: REPLIES[report], report }]);
+      setThinking(false);
+    }, 1600);
   };
 
   return (
@@ -57,13 +97,25 @@ export default function CustomReportBuilder() {
             <button className="report-builder-chat-close" type="button" aria-label="Close conversation" onClick={() => setChat([])}>×</button>
             <div className="report-builder-chat-messages" aria-live="polite">
               {chat.map((message, index) => (
-                <div className={`report-builder-chat-message ${message.role}`} key={`${message.role}-${index}`}>
+                <div className={`report-builder-chat-message ${message.role}${message.report ? ' has-report' : ''}`} key={`${message.role}-${index}`}>
                   <span className="report-builder-chat-avatar" aria-label={message.role === 'user' ? 'You' : 'AI assistant'}>
                     {message.role === 'user' ? 'U' : 'AI'}
                   </span>
-                  <p>{message.text}</p>
+                  <div className="report-builder-chat-body">
+                    <p>{message.text}</p>
+                    {message.report && REPORTS[message.report] && (() => {
+                      const Report = REPORTS[message.report];
+                      return <Report />;
+                    })()}
+                  </div>
                 </div>
               ))}
+              {thinking && (
+                <div className="report-builder-chat-message assistant">
+                  <span className="report-builder-chat-avatar" aria-label="AI assistant">AI</span>
+                  <p>Generating your report…</p>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -77,6 +129,12 @@ export default function CustomReportBuilder() {
           />
           <button type="submit" aria-label="Send prompt">↑</button>
         </form>
+        <div className="report-builder-sample-prompts">
+          <span>Try:</span>
+          {SAMPLE_PROMPTS.map((sample) => (
+            <button key={sample} type="button" onClick={() => setPrompt(sample)}>{sample}</button>
+          ))}
+        </div>
       </div>
       <div className="simple-report-template-grid">
         {TEMPLATES.map((template) => (

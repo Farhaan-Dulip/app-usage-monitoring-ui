@@ -17,6 +17,8 @@ import { planSummary } from './utils/appPlans';
 import {
   NEW_POLICY_RULE,
   TIME_UNITS,
+  describeRule,
+  policyToRule,
   WINDOW_UNITS,
   buildRuleLicenses,
   draftToRule,
@@ -39,6 +41,7 @@ import { sampleDeviceRows, sampleLicenseGroups } from './data/sampleLicenseGroup
 import LicenseOverview from './components/LicenseOverview';
 import DeviceSeatList from './components/DeviceSeatList';
 import RequestRoadmap from './components/RequestRoadmap';
+import DeviceVendorCards from './components/DeviceVendorCards';
 import WorkflowManagement from './components/WorkflowManagement';
 import { OBJECTIVE_STATUS, buildRoadmap } from './utils/requestRoadmap';
 import { sampleRequests, sampleWorkflows } from './data/sampleRequests';
@@ -6883,6 +6886,63 @@ export default function App({ user = null, onSignOut = null }) {
                 </button>
               </div>
             </form>
+            {(() => {
+              // The selected app's policies, one row each.
+              const rows = ruleApp ? appPolicies(ruleApp).map((policy) => ({ app: ruleApp, policy })) : [];
+              if (rows.length === 0) return null;
+              return (
+                <div className="table-wrap app-rule-policy-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Policy</th>
+                        <th>Rule</th>
+                        <th>Onboarded with</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(({ app, policy }) => {
+                        const inUse = Boolean(app.onboarded) && policiesOf(app).some((item) => item.id === policy.id);
+                        return (
+                          <tr key={`${app.id}-${policy.id}`}>
+                            <td><strong>{policy.name}</strong></td>
+                            <td>{describeRule(policy.rule || policyToRule(policy))}</td>
+                            <td>
+                              <span className={`status-badge ${inUse ? 'status-active' : 'status-neutral'}`}>
+                                {inUse ? 'Onboarded' : 'Not in use'}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="policy-actions">
+                                <button
+                                  aria-label={`Edit ${policy.name} for ${app.appName}`}
+                                  className="policy-icon-button policy-icon-button-edit"
+                                  title="Edit policy"
+                                  type="button"
+                                  onClick={() => loadRuleForm(app.id, policy.id)}
+                                >
+                                  <span aria-hidden="true">✎</span>
+                                </button>
+                                <button
+                                  aria-label={`Remove ${policy.name} for ${app.appName}`}
+                                  className="policy-icon-button policy-icon-button-remove"
+                                  title="Remove policy"
+                                  type="button"
+                                  onClick={() => handleRemovePolicy(app.id, policy.id)}
+                                >
+                                  <span aria-hidden="true">×</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </section>
 
           <section className="panel fleet-management-panel">
@@ -7464,6 +7524,11 @@ export default function App({ user = null, onSignOut = null }) {
                 </div>
               )}
               {selectedDevice.registered && <UserAiTools email={selectedDevice.ownerEmail} />}
+              <DeviceVendorCards
+                seats={allLicenseGroups.filter(
+                  (group) => String(group.pcName || '').toLowerCase() === String(selectedDevice.pcName || '').toLowerCase()
+                )}
+              />
             </section>
         )}
       </main>

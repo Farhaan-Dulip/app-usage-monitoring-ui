@@ -54,7 +54,7 @@ const navigationItems = [
   ['unified-dashboard', 'dashboard', 'Dashboard'],
   ['dashboard', 'software', 'License Utilizations'],
   ['agent-management', 'tracker', 'Tracker Management'],
-  ['apps-inventory', 'inventory', 'Enterprise Apps Inventory'],
+  ['apps-inventory', 'inventory', 'Apps License Inventory'],
   ['reporting-insights', 'reports', 'Reporting & Insights'],
   ['license-approvals', 'approvals', 'Request Approvals'],
   ['ai-assistant', 'assistant', 'AI Assistant'],
